@@ -1,15 +1,18 @@
-import dataclasses
 from typing import Any
-from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Tuple
 
 import pandas as pd
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
 from evidently.calculations.data_quality import get_rows_count
+from evidently.core import IncludeTags
+from evidently.metric_results import DistributionIncluded
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import CounterData
@@ -20,19 +23,56 @@ from evidently.renderers.html_widgets import table_data
 from evidently.renderers.html_widgets import widget_tabs
 
 
-@dataclasses.dataclass
-class ValueListStat:
+class ValueListStat(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:ValueListStat"
+        field_tags = {
+            "values_in_list_dist": {IncludeTags.Extra},
+            "values_not_in_list_dist": {IncludeTags.Extra},
+            "rows_count": {IncludeTags.Extra},
+        }
+
+    def __init__(self, **data: Any):
+        if "values_in_list" in data:
+            values_in_list: List[Tuple[Any, int]] = data.pop("values_in_list")
+            data["values_in_list_dist"] = DistributionIncluded(
+                x=[v[0] for v in values_in_list], y=[v[1] for v in values_in_list]
+            )
+        if "values_not_in_list" in data:
+            values_not_in_list: List[Tuple[Any, int]] = data.pop("values_not_in_list")
+            data["values_not_in_list_dist"] = DistributionIncluded(
+                x=[v[0] for v in values_not_in_list], y=[v[1] for v in values_not_in_list]
+            )
+
+        super().__init__(**data)
+
     number_in_list: int
     number_not_in_list: int
     share_in_list: float
     share_not_in_list: float
-    values_in_list: Dict[Any, int]
-    values_not_in_list: Dict[Any, int]
     rows_count: int
+    values_in_list_dist: DistributionIncluded
+    values_not_in_list_dist: DistributionIncluded
+
+    @property
+    def values_in_list(self) -> List[Tuple[Any, int]]:
+        return [(x, y) for x, y in zip(self.values_in_list_dist.x, self.values_in_list_dist.y)]
+
+    @property
+    def values_not_in_list(self) -> List[Tuple[Any, int]]:
+        return [(x, y) for x, y in zip(self.values_not_in_list_dist.x, self.values_not_in_list_dist.y)]
 
 
-@dataclasses.dataclass
-class ColumnValueListMetricResult:
+class ColumnValueListMetricResult(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:ColumnValueListMetricResult"
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "column_name": {IncludeTags.Parameter},
+            "values": {IncludeTags.Parameter},
+        }
+
     column_name: str
     values: List[Any]
     current: ValueListStat
@@ -40,14 +80,18 @@ class ColumnValueListMetricResult:
 
 
 class ColumnValueListMetric(Metric[ColumnValueListMetricResult]):
+    class Config:
+        type_alias = "evidently:metric:ColumnValueListMetric"
+
     """Calculates count and shares of values in the predefined values list"""
 
     column_name: str
     values: Optional[list]
 
-    def __init__(self, column_name: str, values: Optional[list] = None) -> None:
+    def __init__(self, column_name: str, values: Optional[list] = None, options: AnyOptions = None) -> None:
         self.values = values
         self.column_name = column_name
+        super().__init__(options=options)
 
     @staticmethod
     def _calculate_stats(values: list, column: pd.Series) -> ValueListStat:
@@ -71,22 +115,22 @@ class ColumnValueListMetric(Metric[ColumnValueListMetricResult]):
                 else:
                     values_not_in_list[value] = value_counts[value]
 
-            number_in_list = sum(values_in_list.values())
+            number_in_list = sum(values_in_list.values())  # type: ignore[arg-type]
             share_in_list = number_in_list / rows_count
             number_not_in_list = rows_count - number_in_list
             share_not_in_list = number_not_in_list / rows_count
             # fill other values from list with zeroes
             for value in values:
                 if value not in values_in_list:
-                    values_in_list[value] = 0
+                    values_in_list[value] = 0  # type: ignore[assignment]
 
         return ValueListStat(
             number_in_list=number_in_list,
             number_not_in_list=number_not_in_list,
             share_in_list=share_in_list,
             share_not_in_list=share_not_in_list,
-            values_in_list=values_in_list,
-            values_not_in_list=values_not_in_list,
+            values_in_list=[(k, v) for k, v in values_in_list.items()],
+            values_not_in_list=[(k, v) for k, v in values_not_in_list.items()],
             rows_count=rows_count,
         )
 
@@ -128,10 +172,6 @@ class ColumnValueListMetric(Metric[ColumnValueListMetricResult]):
 
 @default_renderer(wrap_type=ColumnValueListMetric)
 class ColumnValueListMetricRenderer(MetricRenderer):
-    def render_json(self, obj: ColumnValueListMetric) -> dict:
-        result = dataclasses.asdict(obj.get_result())
-        return result
-
     @staticmethod
     def _get_table_stat(dataset_name: str, stats: ValueListStat) -> BaseWidgetInfo:
         matched_stat_headers = ["Value", "Count"]
@@ -141,7 +181,7 @@ class ColumnValueListMetricRenderer(MetricRenderer):
                 widget=table_data(
                     title="",
                     column_names=matched_stat_headers,
-                    data=[(k, v) for k, v in stats.values_in_list.items() if v > 0][:10],
+                    data=[(k, v) for k, v in stats.values_in_list if v > 0][:10],
                 ),
             ),
             TabData(
@@ -149,7 +189,7 @@ class ColumnValueListMetricRenderer(MetricRenderer):
                 widget=table_data(
                     title="",
                     column_names=matched_stat_headers,
-                    data=[(k, v) for k, v in stats.values_in_list.items() if v <= 0][:10],
+                    data=[(k, v) for k, v in stats.values_in_list if v <= 0][:10],
                 ),
             ),
             TabData(
@@ -157,7 +197,7 @@ class ColumnValueListMetricRenderer(MetricRenderer):
                 widget=table_data(
                     title="",
                     column_names=matched_stat_headers,
-                    data=list(stats.values_not_in_list.items())[:10],
+                    data=list(stats.values_not_in_list)[:10],
                 ),
             ),
         ]

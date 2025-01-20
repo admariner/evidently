@@ -44,6 +44,7 @@ def test_accuracy_score_test_render_json() -> None:
     )
     suite = TestSuite(tests=[TestAccuracyScore()])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -53,7 +54,7 @@ def test_accuracy_score_test_render_json() -> None:
         "description": "The Accuracy Score is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "Accuracy Score",
-        "parameters": {"accuracy": 0.5, "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}},
+        "parameters": {"value": 0.5, "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}},
         "status": "SUCCESS",
     }
 
@@ -68,6 +69,7 @@ def test_precision_score_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestPrecisionScore(gt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -82,6 +84,7 @@ def test_precision_score_test_render_json() -> None:
     )
     suite = TestSuite(tests=[TestPrecisionScore()])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -91,7 +94,7 @@ def test_precision_score_test_render_json() -> None:
         "description": "The Precision Score is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "Precision Score",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "precision": 0.5},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "value": 0.5},
         "status": "SUCCESS",
     }
 
@@ -120,6 +123,7 @@ def test_f1_score_test_render_json() -> None:
     )
     suite = TestSuite(tests=[TestF1Score()])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -129,7 +133,7 @@ def test_f1_score_test_render_json() -> None:
         "description": "The F1 Score is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "F1 Score",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "f1": 0.5},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "value": 0.5},
         "status": "SUCCESS",
     }
 
@@ -158,6 +162,7 @@ def test_recall_score_test_render_json() -> None:
     )
     suite = TestSuite(tests=[TestRecallScore()])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -167,7 +172,7 @@ def test_recall_score_test_render_json() -> None:
         "description": "The Recall Score is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "Recall Score",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "recall": 0.5},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "value": 0.5},
         "status": "SUCCESS",
     }
 
@@ -188,6 +193,7 @@ def test_log_loss_test() -> None:
 
     suite = TestSuite(tests=[TestLogLoss(lt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -203,6 +209,7 @@ def test_log_loss_test_json_render() -> None:
     column_mapping = ColumnMapping(prediction="b", pos_label="a")
     suite = TestSuite(tests=[TestLogLoss()])
     suite.run(current_data=test_dataset, reference_data=test_dataset, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -214,7 +221,7 @@ def test_log_loss_test_json_render() -> None:
         "name": "Logarithmic Loss",
         "parameters": {
             "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": approx(0.446, abs=0.0001)}},
-            "log_loss": approx(0.446, abs=0.0001),
+            "value": approx(0.446, abs=0.0001),
         },
         "status": "SUCCESS",
     }
@@ -273,6 +280,7 @@ def test_roc_auc_test_json_render() -> None:
     column_mapping = ColumnMapping(prediction=["f", "t"], pos_label="t")
     suite = TestSuite(tests=[TestRocAuc(lt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -282,7 +290,7 @@ def test_roc_auc_test_json_render() -> None:
         "description": "The ROC AUC Score is 0.5. The test threshold is lt=0.8",
         "group": "classification",
         "name": "ROC AUC Score",
-        "parameters": {"condition": {"lt": 0.8}, "roc_auc": 0.5},
+        "parameters": {"condition": {"lt": 0.8}, "value": 0.5},
         "status": "SUCCESS",
     }
 
@@ -317,6 +325,7 @@ def test_precision_by_class_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestPrecisionByClass(label="a", gt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -329,8 +338,9 @@ def test_precision_by_class_test_render_json() -> None:
             "prediction": [1, 0, 1, 0],
         }
     )
-    suite = TestSuite(tests=[TestPrecisionByClass(label="1")])
+    suite = TestSuite(tests=[TestPrecisionByClass(label=1)])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -341,9 +351,9 @@ def test_precision_by_class_test_render_json() -> None:
         "group": "classification",
         "name": "Precision Score by Class",
         "parameters": {
-            "label": "1",
+            "label": 1,
             "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}},
-            "precision": 0.5,
+            "value": 0.5,
         },
         "status": "SUCCESS",
     }
@@ -359,6 +369,7 @@ def test_f1_by_class_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestF1ByClass(label="a", gt=0.5)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -371,8 +382,9 @@ def test_f1_by_class_test_render_json() -> None:
             "prediction": [1, 0, 1, 0],
         }
     )
-    suite = TestSuite(tests=[TestF1ByClass(label="0")])
+    suite = TestSuite(tests=[TestF1ByClass(label=0)])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -384,8 +396,8 @@ def test_f1_by_class_test_render_json() -> None:
         "name": "F1 Score by Class",
         "parameters": {
             "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.0}},
-            "f1": 0.0,
-            "label": "0",
+            "value": 0.0,
+            "label": 0,
         },
         "status": "SUCCESS",
     }
@@ -401,6 +413,7 @@ def test_recall_by_class_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestRecallByClass(label="b", gt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -413,8 +426,9 @@ def test_recall_by_class_test_render_json() -> None:
             "prediction": [1, 0, 1, 0],
         }
     )
-    suite = TestSuite(tests=[TestRecallByClass(label="1")])
+    suite = TestSuite(tests=[TestRecallByClass(label=1)])
     suite.run(current_data=test_dataset, reference_data=test_dataset)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -426,8 +440,8 @@ def test_recall_by_class_test_render_json() -> None:
         "name": "Recall Score by Class",
         "parameters": {
             "condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}},
-            "label": "1",
-            "recall": 0.5,
+            "label": 1,
+            "value": 0.5,
         },
         "status": "SUCCESS",
     }
@@ -443,6 +457,7 @@ def test_tpr_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestTPR(lt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -458,6 +473,7 @@ def test_tpr_test_render_json() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestTPR()])
     suite.run(current_data=test_dataset, reference_data=test_dataset, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -467,7 +483,7 @@ def test_tpr_test_render_json() -> None:
         "description": "The True Positive Rate is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "True Positive Rate",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "tpr": 0.5},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "value": 0.5},
         "status": "SUCCESS",
     }
 
@@ -482,6 +498,7 @@ def test_tnr_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestTNR(gt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -497,6 +514,7 @@ def test_tnr_test_render_json() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestTNR()])
     suite.run(current_data=test_dataset, reference_data=test_dataset, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -506,7 +524,7 @@ def test_tnr_test_render_json() -> None:
         "description": "The True Negative Rate is 1. The test threshold is eq=1 ± 0.2",
         "group": "classification",
         "name": "True Negative Rate",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 1}}, "tnr": 1},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 1}}, "value": 1},
         "status": "SUCCESS",
     }
 
@@ -521,6 +539,7 @@ def test_fpr_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestFPR(lt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -536,6 +555,7 @@ def test_fpr_test_render_json() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestFPR()])
     suite.run(current_data=test_dataset, reference_data=test_dataset, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -545,7 +565,7 @@ def test_fpr_test_render_json() -> None:
         "description": "The False Positive Rate is 0. The test threshold is eq=0 ± 1e-12",
         "group": "classification",
         "name": "False Positive Rate",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0}}, "fpr": 0},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0}}, "value": 0},
         "status": "SUCCESS",
     }
 
@@ -560,6 +580,7 @@ def test_fnr_test() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestFNR(lt=0.8)])
     suite.run(current_data=test_dataset, reference_data=None, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
     assert suite.show()
     assert suite.json()
@@ -575,6 +596,7 @@ def test_fnr_test_render_json() -> None:
     column_mapping = ColumnMapping(pos_label="a")
     suite = TestSuite(tests=[TestFNR()])
     suite.run(current_data=test_dataset, reference_data=test_dataset, column_mapping=column_mapping)
+    suite._inner_suite.raise_for_error()
     assert suite
 
     result_from_json = json.loads(suite.json())
@@ -584,6 +606,6 @@ def test_fnr_test_render_json() -> None:
         "description": "The False Negative Rate is 0.5. The test threshold is eq=0.5 ± 0.1",
         "group": "classification",
         "name": "False Negative Rate",
-        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "fnr": 0.5},
+        "parameters": {"condition": {"eq": {"absolute": 1e-12, "relative": 0.2, "value": 0.5}}, "value": 0.5},
         "status": "SUCCESS",
     }

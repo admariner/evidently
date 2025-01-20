@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evidently import ColumnMapping
 from evidently.metric_preset import DataQualityPreset
+from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.report import Report
 
 
@@ -43,14 +43,34 @@ from evidently.report import Report
             pd.DataFrame(
                 {
                     "myid": "some_id",
-                    "my_target": [1, np.NaN, 3, 3, 2, 1],
+                    "my_target": [1, np.nan, 3, 3, 2, 1],
                     "prediction": [1, 2, 3, 3, 2, 1],
-                    "feature1": [1, 2, 3, np.NaN, 2, np.NaN],
-                    "feature2": [np.NaN, "b", "c", "a", "b", "c"],
-                    "feature3": [np.NaN, "b", "c", "a", "b", "c"],
+                    "feature1": [1, 2, 3, np.nan, 2, np.nan],
+                    "feature2": [np.nan, "b", "c", "a", "b", "c"],
+                    "feature3": [np.nan, "b", "c", "a", "b", "c"],
                     "datetime": pd.date_range("2020-01-01", periods=6),
                 }
             ),
+            DataQualityPreset(),
+            ColumnMapping(
+                target="my_target",
+                id="myid",
+                prediction="prediction",
+                datetime="datetime",
+            ),
+        ),
+        (
+            pd.DataFrame(
+                {
+                    "myid": "some_id",
+                    "my_target": [1, 2, 3],
+                    "prediction": [1, 2, 3],
+                    "feature1": [1, 2, 3],
+                    "feature2": ["a", "b", "c"],
+                    "datetime": pd.date_range("2020-01-01", periods=3),
+                }
+            ),
+            None,
             DataQualityPreset(),
             ColumnMapping(
                 target="my_target",

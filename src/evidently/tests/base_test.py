@@ -1,18 +1,34 @@
 import abc
 import dataclasses
 from abc import ABC
-from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
 from typing import Any
+from typing import ClassVar
 from typing import Dict
+from typing import Generic
 from typing import List
 from typing import Optional
 from typing import Type
+from typing import TypeVar
 from typing import Union
 
+from evidently.base_metric import BaseResult
+from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
+from evidently.core import IncludeTags
+from evidently.pydantic_utils import EnumValueMixin
+from evidently.pydantic_utils import EvidentlyBaseModel
+from evidently.pydantic_utils import ExcludeNoneMixin
+from evidently.pydantic_utils import WithTestAndMetricDependencies
 from evidently.utils.generators import BaseGenerator
 from evidently.utils.generators import make_generator_by_columns
 from evidently.utils.types import ApproxValue
 from evidently.utils.types import Numeric
+from evidently.utils.types import NumericApprox
+
+if TYPE_CHECKING:
+    from evidently.suite.base_suite import Context
 
 
 @dataclasses.dataclass
@@ -62,11 +78,15 @@ class GroupingTypes:
     TestType = GroupTypeData("test_type", "By test type", [])
 
 
-DEFAULT_GROUP = [GroupingTypes.ByFeature, GroupingTypes.TestGroup, GroupingTypes.TestType, GroupingTypes.ByClass]
+DEFAULT_GROUP = [
+    GroupingTypes.ByFeature,
+    GroupingTypes.TestGroup,
+    GroupingTypes.TestType,
+    GroupingTypes.ByClass,
+]
 
 
-@dataclass
-class TestResult:
+class TestStatus(Enum):
     # Constants for test result status
     SUCCESS = "SUCCESS"  # the test was passed
     FAIL = "FAIL"  # success pass for the test
@@ -74,76 +94,119 @@ class TestResult:
     ERROR = "ERROR"  # cannot calculate the test result, no data
     SKIPPED = "SKIPPED"  # the test was skipped
 
+
+class TestParameters(EvidentlyBaseModel, BaseResult):  # type: ignore[misc] # pydantic Config
+    class Config:
+        type_alias = "evidently:test_parameters:TestParameters"
+        field_tags = {"type": {IncludeTags.TypeField}}
+        is_base_type = True
+
+
+class TestResult(EnumValueMixin, MetricResult):  # todo: create common base class
     # short name/title from the test class
+    class Config:
+        type_alias = "evidently:metric_result:TestResult"
+
     name: str
     # what was checked, what threshold (current value 13 is not ok with condition less than 5)
     description: str
     # status of the test result
-    status: str
+    status: TestStatus
     # grouping parameters
-    groups: Dict[str, str] = dataclasses.field(default_factory=dict)
+    group: str
+    parameters: Optional[TestParameters]
+    _exception: Optional[BaseException] = None
 
-    def set_status(self, status: str, description: Optional[str] = None) -> None:
+    @property
+    def exception(self):
+        return self._exception
+
+    def set_status(self, status: TestStatus, description: Optional[str] = None) -> None:
         self.status = status
 
         if description is not None:
             self.description = description
 
     def mark_as_fail(self, description: Optional[str] = None):
-        self.set_status(self.FAIL, description=description)
+        self.set_status(TestStatus.FAIL, description=description)
 
     def mark_as_error(self, description: Optional[str] = None):
-        self.set_status(self.ERROR, description=description)
+        self.set_status(TestStatus.ERROR, description=description)
 
     def mark_as_success(self, description: Optional[str] = None):
-        self.set_status(self.SUCCESS, description=description)
+        self.set_status(TestStatus.SUCCESS, description=description)
 
     def mark_as_warning(self, description: Optional[str] = None):
-        self.set_status(self.WARNING, description=description)
+        self.set_status(TestStatus.WARNING, description=description)
 
     def is_passed(self):
-        return self.status in [self.SUCCESS, self.WARNING]
+        return self.status in [TestStatus.SUCCESS, TestStatus.WARNING]
 
 
-class Test:
+class Test(WithTestAndMetricDependencies):
+    class Config:
+        is_base_type = True
+
     """
     all fields in test class with type that is subclass of Metric would be used as dependencies of test.
     """
 
-    name: str
-    group: str
-    context = None
+    name: ClassVar[str]
+    group: ClassVar[str]
+    is_critical: bool = True
+    _context: Optional["Context"] = None
 
     @abc.abstractmethod
     def check(self) -> TestResult:
-        raise NotImplementedError()
+        raise NotImplementedError
 
-    def set_context(self, context):
-        self.context = context
+    def set_context(self, context: "Context"):
+        self._context = context
 
-    def get_result(self):
-        if self.context is None:
+    def get_result(self) -> TestResult:
+        if self._context is None:
             raise ValueError("No context is set")
-        result = self.context.test_results.get(self, None)
+        result = self._context.test_results.get(self, None)
         if result is None:
             raise ValueError(f"No result found for metric {self} of type {type(self).__name__}")
-        return result
+        return result  # type: ignore[return-value]
+
+    def get_id(self) -> str:
+        return self.__class__.__name__
+
+    @abc.abstractmethod
+    def groups(self) -> Dict[str, str]:
+        raise NotImplementedError
+
+    def get_groups(self) -> Dict[str, str]:
+        groups = self.groups()
+        groups.update(
+            {
+                GroupingTypes.TestGroup.id: self.group,
+                GroupingTypes.TestType.id: self.name,
+            }
+        )
+        return groups
 
 
-@dataclass
-class TestValueCondition:
+class TestValueCondition(ExcludeNoneMixin):
     """
     Class for processing a value conditions - should it be less, greater than, equals and so on.
 
     An object of the class stores specified conditions and can be used for checking a value by them.
     """
 
-    eq: Optional[Numeric] = None
-    gt: Optional[Numeric] = None
-    gte: Optional[Numeric] = None
+    class Config:
+        arbitrary_types_allowed = True
+        use_enum_values = True
+        smart_union = True
+
+    eq: Optional[NumericApprox] = None
+    gt: Optional[NumericApprox] = None
+    gte: Optional[NumericApprox] = None
     is_in: Optional[List[Union[Numeric, str, bool]]] = None
-    lt: Optional[Numeric] = None
-    lte: Optional[Numeric] = None
+    lt: Optional[NumericApprox] = None
+    lte: Optional[NumericApprox] = None
     not_eq: Optional[Numeric] = None
     not_in: Optional[List[Union[Numeric, str, bool]]] = None
 
@@ -155,7 +218,16 @@ class TestValueCondition:
         """
         return any(
             value is not None
-            for value in (self.eq, self.gt, self.gte, self.is_in, self.lt, self.lte, self.not_in, self.not_eq)
+            for value in (
+                self.eq,
+                self.gt,
+                self.gte,
+                self.is_in,
+                self.lt,
+                self.lte,
+                self.not_in,
+                self.not_eq,
+            )
         )
 
     def check_value(self, value: Numeric) -> bool:
@@ -205,40 +277,53 @@ class TestValueCondition:
 
         return f"{' and '.join(conditions)}"
 
-    def as_dict(self) -> dict:
-        result = {}
-        operations = ["eq", "gt", "gte", "lt", "lte", "not_eq", "is_in", "not_in"]
 
-        for op in operations:
-            value = getattr(self, op)
+class ConditionTestParameters(TestParameters):
+    class Config:
+        type_alias = "evidently:test_parameters:ConditionTestParameters"
 
-            if value is not None:
-                result[op] = value
-
-        return result
+    condition: TestValueCondition
 
 
-class BaseConditionsTest(Test, ABC):
+class BaseConditionsTest(Test, TestValueCondition, ABC):
     """
     Base class for all tests with a condition
     """
 
-    condition: TestValueCondition
+    class Config:
+        arbitrary_types_allowed = True
+        use_enum_values = True
+        smart_union = True
+        underscore_attrs_are_private = True
 
-    def __init__(
-        self,
-        eq: Optional[Numeric] = None,
-        gt: Optional[Numeric] = None,
-        gte: Optional[Numeric] = None,
-        is_in: Optional[List[Union[Numeric, str, bool]]] = None,
-        lt: Optional[Numeric] = None,
-        lte: Optional[Numeric] = None,
-        not_eq: Optional[Numeric] = None,
-        not_in: Optional[List[Union[Numeric, str, bool]]] = None,
-    ):
-        self.condition = TestValueCondition(
-            eq=eq, gt=gt, gte=gte, is_in=is_in, lt=lt, lte=lte, not_eq=not_eq, not_in=not_in
+    # condition: TestValueCondition
+
+    @property
+    def condition(self) -> TestValueCondition:
+        return TestValueCondition(
+            eq=self.eq,
+            gt=self.gt,
+            gte=self.gte,
+            is_in=self.is_in,
+            lt=self.lt,
+            lte=self.lte,
+            not_eq=self.not_eq,
+            not_in=self.not_in,
         )
+
+
+class CheckValueParameters(ConditionTestParameters):
+    class Config:
+        type_alias = "evidently:test_parameters:CheckValueParameters"
+
+    value: Optional[Numeric]
+
+
+class ColumnCheckValueParameters(CheckValueParameters):
+    class Config:
+        type_alias = "evidently:test_parameters:ColumnCheckValueParameters"
+
+    column_name: str
 
 
 class BaseCheckValueTest(BaseConditionsTest):
@@ -246,7 +331,7 @@ class BaseCheckValueTest(BaseConditionsTest):
     Base class for all tests with checking a value condition
     """
 
-    value: Numeric
+    _value: Numeric
 
     @abc.abstractmethod
     def calculate_value_for_test(self) -> Optional[Any]:
@@ -269,11 +354,21 @@ class BaseCheckValueTest(BaseConditionsTest):
     def groups(self) -> Dict[str, str]:
         return {}
 
+    def get_parameters(self) -> CheckValueParameters:
+        return CheckValueParameters(condition=self.get_condition(), value=self._value)
+
     def check(self):
-        result = TestResult(name=self.name, description="The test was not launched", status=TestResult.SKIPPED)
+        result = TestResult(
+            name=self.name,
+            description="The test was not launched",
+            status=TestStatus.SKIPPED,
+            group=self.group,
+            parameters=None,
+        )
         value = self.calculate_value_for_test()
-        self.value = value
+        self._value = value
         result.description = self.get_description(value)
+        result.parameters = self.get_parameters()
 
         try:
             if value is None:
@@ -296,14 +391,34 @@ class BaseCheckValueTest(BaseConditionsTest):
         except ValueError:
             result.mark_as_error("Cannot calculate the condition")
 
-        result.groups.update(self.groups())
         return result
 
 
+T = TypeVar("T", bound=MetricResult)
+
+
+class ConditionFromReferenceMixin(BaseCheckValueTest, Generic[T], ABC):
+    reference_field: ClassVar[str] = "reference"
+    _metric: Metric
+
+    def get_condition_from_reference(self, reference: Optional[T]) -> TestValueCondition:
+        raise NotImplementedError
+
+    def get_condition(self) -> TestValueCondition:
+        if self.condition.has_condition():
+            return self.condition
+
+        reference_stats = getattr(self.metric.get_result(), self.reference_field)
+
+        return self.get_condition_from_reference(reference_stats)
+
+    @property
+    def metric(self):
+        return self._metric
+
+
 def generate_column_tests(
-    test_class: Type[Test],
-    columns: Optional[Union[str, list]] = None,
-    parameters: Optional[Dict] = None,
+    test_class: Type[Test], columns: Optional[Union[str, list]] = None, parameters: Optional[Dict] = None
 ) -> BaseGenerator:
     """Function for generating tests for columns"""
     return make_generator_by_columns(

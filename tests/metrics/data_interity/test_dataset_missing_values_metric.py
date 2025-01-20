@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evidently import ColumnMapping
 from evidently.metrics import DatasetMissingValuesMetric
+from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.report import Report
 
 
@@ -51,7 +51,7 @@ def test_dataset_missing_values_metric_different_missing_values() -> None:
             "numerical_feature_1": [3, -9999, 0],
             "numerical_feature_2": [0, None, -np.inf],
             "prediction": [1, pd.NaT, 1],
-            "target": [None, np.NAN, 1],
+            "target": [None, np.nan, 1],
         }
     )
     data_mapping = ColumnMapping()
@@ -137,9 +137,7 @@ def test_dataset_missing_values_metric_different_missing_values() -> None:
     ),
 )
 def test_dataset_missing_values_metrics_value_error(
-    current_data: pd.DataFrame,
-    reference_data: pd.DataFrame,
-    metric: DatasetMissingValuesMetric,
+    current_data: pd.DataFrame, reference_data: pd.DataFrame, metric: DatasetMissingValuesMetric
 ) -> None:
     with pytest.raises(ValueError):
         report = Report(metrics=[metric])

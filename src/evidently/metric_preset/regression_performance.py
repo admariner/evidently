@@ -1,7 +1,9 @@
+from typing import Any
+from typing import Dict
 from typing import List
 from typing import Optional
 
-from evidently.base_metric import InputData
+from evidently.metric_preset.metric_preset import AnyMetric
 from evidently.metric_preset.metric_preset import MetricPreset
 from evidently.metrics import RegressionAbsPercentageErrorPlot
 from evidently.metrics import RegressionErrorBiasTable
@@ -12,10 +14,13 @@ from evidently.metrics import RegressionPredictedVsActualPlot
 from evidently.metrics import RegressionPredictedVsActualScatter
 from evidently.metrics import RegressionQualityMetric
 from evidently.metrics import RegressionTopErrorMetric
-from evidently.utils.data_operations import DatasetColumns
+from evidently.utils.data_preprocessing import DataDefinition
 
 
 class RegressionPreset(MetricPreset):
+    class Config:
+        type_alias = "evidently:metric_preset:RegressionPreset"
+
     """Metric preset for Regression performance analysis.
 
     Contains metrics:
@@ -33,10 +38,12 @@ class RegressionPreset(MetricPreset):
     columns: Optional[List[str]]
 
     def __init__(self, columns: Optional[List[str]] = None):
-        super().__init__()
         self.columns = columns
+        super().__init__()
 
-    def generate_metrics(self, data: InputData, columns: DatasetColumns):
+    def generate_metrics(
+        self, data_definition: DataDefinition, additional_data: Optional[Dict[str, Any]]
+    ) -> List[AnyMetric]:
         return [
             RegressionQualityMetric(),
             RegressionPredictedVsActualScatter(),

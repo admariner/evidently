@@ -52,13 +52,15 @@ The tool does not yet work for multi-label classification. It expects a single t
 
 To generate a comparative report, you will need **two** datasets. 
 
-![](<../.gitbook/assets/two\_datasets\_classification (1) (1).png>)
+![](<../.gitbook/assets/two\_datasets\_classification.png>)
 
 You can also run this report for a **single** dataset, with no comparison performed.
 
 ## How it looks
 
 The report includes multiple components. The composition might vary based on problem type (there are more plots in the case of probabilistic classification). All plots are interactive.
+
+**Aggregated visuals in plots.** Starting from v 0.3.2, all visuals in the Evidently Reports are aggregated by default. This helps decrease the load time and report size for larger datasets. If you work with smaller datasets or samples, you can pass an [option to generate plots with raw data](../customization/report-data-aggregation.md). You can choose whether you want it on not based on the size of your dataset.
 
 ### **1. Model Quality Summary Metrics**
 
@@ -132,7 +134,7 @@ In the tab “ALL”, you can see the distribution of classes against the values
 
 ![](<../.gitbook/assets/prob\_class\_perf\_classification\_quality\_by\_feature\_example\_all (1).png>)
 
-For each class, you can seee the predicted probabilities alongside the values of the feature.
+For each class, you can see the predicted probabilities alongside the values of the feature.
 
 ![](<../.gitbook/assets/prob\_class\_perf\_classification\_quality\_by\_feature\_example\_class (1).png>)
 

@@ -5,10 +5,11 @@ from typing import Union
 import pandas as pd
 import pytest
 
-from evidently import ColumnMapping
 from evidently.calculations.data_drift import ensure_prediction_column_is_string
 from evidently.calculations.data_drift import get_one_column_drift
-from evidently.options import DataDriftOptions
+from evidently.core import ColumnType
+from evidently.options.data_drift import DataDriftOptions
+from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.utils.data_operations import process_columns
 
 
@@ -71,13 +72,20 @@ def test_ensure_prediction_column_is_string(
 @pytest.mark.parametrize(
     "current_data, reference_data, column_name, options, column_type, expected_drift_detected",
     (
-        (pd.DataFrame({"test": [1, 2, 3]}), pd.DataFrame({"test": [1, 2, 3]}), "test", DataDriftOptions(), None, False),
         (
             pd.DataFrame({"test": [1, 2, 3]}),
             pd.DataFrame({"test": [1, 2, 3]}),
             "test",
             DataDriftOptions(),
-            "cat",
+            ColumnType.Categorical,
+            False,
+        ),
+        (
+            pd.DataFrame({"test": [1, 2, 3]}),
+            pd.DataFrame({"test": [1, 2, 3]}),
+            "test",
+            DataDriftOptions(),
+            ColumnType.Categorical,
             False,
         ),
         (
@@ -85,7 +93,7 @@ def test_ensure_prediction_column_is_string(
             pd.DataFrame({"test": [1, 2, 3], "target": [3, 2, 1]}),
             "test",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             False,
         ),
         (
@@ -93,7 +101,7 @@ def test_ensure_prediction_column_is_string(
             pd.DataFrame({"test": [1, 2, 3], "target": [3, 2, 1]}),
             "test",
             DataDriftOptions(),
-            "cat",
+            ColumnType.Categorical,
             False,
         ),
         (
@@ -101,7 +109,7 @@ def test_ensure_prediction_column_is_string(
             pd.DataFrame({"test": [4, 5, 6], "target": [1, 2, 3]}),
             "target",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             False,
         ),
     ),
@@ -111,7 +119,7 @@ def test_get_one_column_drift_success(
     reference_data: pd.DataFrame,
     column_name: str,
     options: DataDriftOptions,
-    column_type: Optional[str],
+    column_type: ColumnType,
     expected_drift_detected: bool,
 ):
     dataset_columns = process_columns(reference_data, ColumnMapping())
@@ -122,6 +130,7 @@ def test_get_one_column_drift_success(
         options=options,
         dataset_columns=dataset_columns,
         column_type=column_type,
+        agg_data=False,
     )
     assert result.drift_detected == expected_drift_detected
 
@@ -134,7 +143,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": [1, 2, 3]}),
             "feature",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             "Cannot find column 'feature' in current dataset",
         ),
         (
@@ -142,7 +151,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": [1, 2, 3]}),
             "feature",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             "Cannot find column 'feature' in reference dataset",
         ),
         (
@@ -150,7 +159,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": [1, 2, 3]}),
             "test",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             "An empty column 'test' was provided for drift calculation in the current dataset.",
         ),
         (
@@ -158,7 +167,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": [None, None, None]}),
             "test",
             DataDriftOptions(),
-            None,
+            ColumnType.Categorical,
             "An empty column 'test' was provided for drift calculation in the reference dataset.",
         ),
         (
@@ -166,7 +175,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": [1, 2, 3]}),
             "test",
             DataDriftOptions(),
-            "num",
+            ColumnType.Numerical,
             "Column 'test' in current dataset should contain numerical values only.",
         ),
         (
@@ -174,7 +183,7 @@ def test_get_one_column_drift_success(
             pd.DataFrame({"test": ["a", "b", 3]}),
             "test",
             DataDriftOptions(),
-            "num",
+            ColumnType.Numerical,
             "Column 'test' in reference dataset should contain numerical values only.",
         ),
     ),
@@ -184,7 +193,7 @@ def test_get_one_column_drift_value_error(
     reference_data: pd.DataFrame,
     column_name: str,
     options: DataDriftOptions,
-    column_type: Optional[str],
+    column_type: ColumnType,
     expected_value_error: bool,
 ):
     dataset_columns = process_columns(reference_data, ColumnMapping())
@@ -196,5 +205,6 @@ def test_get_one_column_drift_value_error(
             options=options,
             dataset_columns=dataset_columns,
             column_type=column_type,
+            agg_data=False,
         )
     assert error.value.args[0] == expected_value_error

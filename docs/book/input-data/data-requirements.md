@@ -1,61 +1,52 @@
 ---
-description: How to prepare the data to run Evidently reports or tests.
+description: How to prepare the data to run Evidently Reports or Test Suites.
 ---
 
-# Input data
+To run evaluations on your datasets with the Evidently Python library, you should prepare your data in a certain way. This section covers how to do that. 
 
-**TL;DR:** Pass two datasets: reference and current. Use `pandas.DataFrame`. Keep the schema identical. Downsample if too large. As an option, pass only the current data.
-
-## Data Preparation
-
-Prepare the input data as a `pandas.DataFrame`.
-
-You typically need **two datasets**. In Evidently, we call them `reference` and `current` datasets.
-
-* **Reference** dataset is a baseline for comparison. This can be training data or earlier production data.
-* **Current** dataset is the second dataset compared to the baseline. It can include the most recent production data.
-
-![](<../.gitbook/assets/two\_datasets\_classification (1) (2).png>)
-
-## Single dataset
-
-If you want to use a **single** dataset without reference, pass it as the **current** dataset.
-
-It will work in most cases. One exception is calculating data or prediction drift which always requires two datasets to compare the distributions.
-
-If you pass a single dataset to generate a **report**, there will be no side-by-side comparison. The report will show metrics (e.g., Data Quality or Regression Performance metrics) for a single dataset.
-
-If you pass a single dataset to run **tests**, Evidently will use the default test parameters. For example, it will compare the model performance with a dummy model. You can also manually set the test conditions (e.g., expected min-max value ranges) without the reference dataset.
-
-{% hint style="info" %}
-The default parameters for each test are listed in the [All tests](../reference/all-tests.md) table.
+{% hint style="success" %}
+This applies to `Evidently OSS`, `Evidently Cloud` and `Evidently Enterprise`. 
 {% endhint %}
 
-## Dataset structure
-
-To use Evidently, you need a dataset that contains model prediction logs. It might contain:
-
-* Input feature columns
-* Prediction column
-* Target column (if known)
-* Additional columns such as DateTime and ID
-
-The exact schema requirements differ based on the contents of the report or test suite. For example, to evaluate Data Drift or Data Quality, you can pass only the feature columns. To evaluate Model Performance, you also need model prediction and target (true labels or actuals).
-
-If you pass two datasets, the structure of both datasets should be identical. All column names should be `string`.
-
 {% hint style="info" %}
-You can read more about the data schema requirements in the [column mapping section](column-mapping.md).
+**Looking for something else?** Check [Tracing](../tracing/tracing_overview.md) to instrument your app. Check [Datasets](../datasets/datasets_overview.md) to work with datasets in the user interface. To run evaluations after you prepare the data, see [Reports and Test Suites](../tests-and-reports/introduction.md).
 {% endhint %}
 
-## Data volume and sampling
+# Input data format
 
-HTML **reports** may take time to load. This is because they store some of the data inside the HTML to generate the interactive plots. The exact limitation depends on your infrastructure (e.g., memory).
+Evidently works with Pandas DataFrames, with some metrics also supported on [Spark](../tests-and-reports/spark.md).
 
-If the dataset is too large, you might need to downsample it before passing the data to Evidently. For instance, you can apply random sampling or stratified sampling. You can also limit the number of columns (e.g., generate the report only for the most important features).
+Your input data should be in **tabular** format. All column names must be strings. The data can include any numerical, categorical, text, DateTime, and ID columns. You can pass embeddings as numerical features. 
 
-**Test suites** contain different visualizations and can handle larger input data volumes.
+The structure is flexible. For example, you can pass:
+* **Any tabular dataset**. You can run checks for data quality and drift for any dataset.
+* **Logs of generative LLM application**. Include text inputs, outputs, and metadata.
+* **ML model inferences**. You can analyze prediction logs that include model features (numerical, categorical, embeddings), predictions, and optional target values. 
 
-## Supported data types
+To run certain evaluations, you must include specific columns. For instance, to evaluate classification quality, you need columns with predicted and actual labels. These should be named "prediction" and "target", or you’ll need to point to the columns that contain them. This process is called **Column Mapping**. 
 
-Right now, Evidently works with tabular and raw text data. You can also pass a dataset that contains different data types: for example, some columns may contain numerical or categorical data, while others contain text.
+Learn more in the next section:
+{% content-ref url="column-mapping.md" %}
+[Column Mapping](column-mapping.md)
+{% endcontent-ref %}
+
+# Reference and current data
+
+Usually, you evaluate a single dataset, which we call the **current** dataset. In some cases, you might also use a second dataset, known as the **reference** dataset. You pass them both when running an evaluation.
+
+![](<../.gitbook/assets/two\_datasets\_classification.png>)
+
+When you may need two datasets:
+* **Side-by-side comparison**. If you want to compare model performance or data quality over two different periods or between model versions, you can do this inside one Report. Pass one dataset as `current`, and another as `reference`.
+* **Data drift detection**. To detect distribution shifts, you compare two datasets using methods like distance metrics. You always need two datasets. Use your latest production batch as `current`, and choose a `reference` dataset to compare against, such as your validation data or an earlier production batch.
+* **Automatic Test generation**. If you provide a `reference` dataset, Evidently can automatically set up Test conditions, like expected min-max values for specific columns. This way, you don’t have to write each test condition manually.
+
+If you pass two datasets, the structure of both datasets should be identical. 
+
+# Data volume
+
+Running computationally intensive evaluations on large datasets can take time. This depends on the specific evaluation as well as your infrastructure. 
+
+In many cases, such as for probabilistic data drift detection, it’s more efficient to work with **samples** of your data. For instance, instead of running drift detection on millions of rows, you can apply random or stratified sampling and then compare samples of your data.  
+
+For datasets that don’t fit in memory, you can run calculations using [Spark](../tests-and-reports/spark.md).

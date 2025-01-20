@@ -2,11 +2,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evidently.calculations.data_quality import ColumnCorrelations
 from evidently.calculations.data_quality import calculate_column_distribution
 from evidently.calculations.data_quality import calculate_cramer_v_correlation
 from evidently.calculations.data_quality import get_rows_count
-from evidently.utils.visualizations import Distribution
+from evidently.metric_results import ColumnCorrelations
+from evidently.metric_results import Distribution
 
 
 @pytest.mark.parametrize(
@@ -16,7 +16,7 @@ from evidently.utils.visualizations import Distribution
         (pd.DataFrame({"test": [1, 2, 3]}), 3),
         (pd.DataFrame({"test": [1, 2, None]}), 3),
         (pd.DataFrame({"test": [None, None, None]}), 3),
-        (pd.DataFrame({"test": [np.NAN, pd.NA, 2, 0, pd.NaT], "target": [1, 0, 1, 0, 1]}), 5),
+        (pd.DataFrame({"test": [np.nan, pd.NA, 2, 0, pd.NaT], "target": [1, 0, 1, 0, 1]}), 5),
     ),
 )
 def test_get_rows_count(dataset: pd.DataFrame, expected_rows: int) -> None:

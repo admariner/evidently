@@ -1,7 +1,5 @@
 import collections
-import dataclasses
 import re
-from dataclasses import dataclass
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -11,8 +9,11 @@ import pandas as pd
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
 from evidently.calculations.data_quality import get_rows_count
+from evidently.core import IncludeTags
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import CounterData
@@ -23,9 +24,18 @@ from evidently.renderers.html_widgets import table_data
 from evidently.renderers.html_widgets import widget_tabs
 
 
-@dataclass
-class DataIntegrityValueByRegexpStat:
+class DataIntegrityValueByRegexpStat(MetricResult):
     """Statistics about matched by a regular expression values in a column for one dataset"""
+
+    class Config:
+        type_alias = "evidently:metric_result:DataIntegrityValueByRegexpStat"
+        pd_exclude_fields = {"table_of_matched", "table_of_not_matched"}
+
+        field_tags = {
+            "number_of_rows": {IncludeTags.Extra},
+            "table_of_matched": {IncludeTags.Extra},
+            "table_of_not_matched": {IncludeTags.Extra},
+        }
 
     # count of matched values in the column, without NaNs
     number_of_matched: int
@@ -39,8 +49,17 @@ class DataIntegrityValueByRegexpStat:
     table_of_not_matched: Dict[str, int]
 
 
-@dataclass
-class DataIntegrityValueByRegexpMetricResult:
+class DataIntegrityValueByRegexpMetricResult(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:DataIntegrityValueByRegexpMetricResult"
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "column_name": {IncludeTags.Parameter},
+            "reg_exp": {IncludeTags.Parameter},
+            "top": {IncludeTags.Parameter},
+        }
+
     # name of the column that we check by the regular expression
     column_name: str
     # the regular expression as a string
@@ -53,6 +72,9 @@ class DataIntegrityValueByRegexpMetricResult:
 
 
 class ColumnRegExpMetric(Metric[DataIntegrityValueByRegexpMetricResult]):
+    class Config:
+        type_alias = "evidently:metric:ColumnRegExpMetric"
+
     """Count number of values in a column matched or not by a regular expression (regexp)"""
 
     # name of the column that we check
@@ -63,11 +85,12 @@ class ColumnRegExpMetric(Metric[DataIntegrityValueByRegexpMetricResult]):
     # compiled regular expression for speed optimization
     _reg_exp_compiled: Pattern
 
-    def __init__(self, column_name: str, reg_exp: str, top: int = 10):
+    def __init__(self, column_name: str, reg_exp: str, top: int = 10, options: AnyOptions = None):
         self.top = top
         self.reg_exp = reg_exp
         self.column_name = column_name
         self._reg_exp_compiled = re.compile(reg_exp)
+        super().__init__(options=options)
 
     def _calculate_stats_by_regexp(self, column: pd.Series) -> DataIntegrityValueByRegexpStat:
         number_of_matched = 0
@@ -124,21 +147,25 @@ class ColumnRegExpMetric(Metric[DataIntegrityValueByRegexpMetricResult]):
             reference = self._calculate_stats_by_regexp(data.reference_data[self.column_name])
 
         return DataIntegrityValueByRegexpMetricResult(
-            column_name=self.column_name, reg_exp=self.reg_exp, top=self.top, current=current, reference=reference
+            column_name=self.column_name,
+            reg_exp=self.reg_exp,
+            top=self.top,
+            current=current,
+            reference=reference,
         )
 
 
 @default_renderer(wrap_type=ColumnRegExpMetric)
 class ColumnRegExpMetricRenderer(MetricRenderer):
-    def render_json(self, obj: ColumnRegExpMetric) -> dict:
-        return dataclasses.asdict(obj.get_result())
-
     @staticmethod
     def _get_counters(dataset_name: str, metrics: DataIntegrityValueByRegexpStat) -> BaseWidgetInfo:
         percents = round(metrics.number_of_not_matched * 100 / metrics.number_of_rows, 3)
         counters = [
             CounterData(label="Number of Values", value=f"{metrics.number_of_rows}"),
-            CounterData(label="Mismatched", value=f"{metrics.number_of_not_matched} ({percents}%)"),
+            CounterData(
+                label="Mismatched",
+                value=f"{metrics.number_of_not_matched} ({percents}%)",
+            ),
         ]
         return counter(
             counters=counters,

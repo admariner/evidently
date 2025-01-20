@@ -1,17 +1,22 @@
-import dataclasses
-from dataclasses import dataclass
 from typing import Any
+from typing import ClassVar
 from typing import Dict
+from typing import FrozenSet
 from typing import List
 from typing import Optional
+from typing import Union
 
 import numpy as np
 import pandas as pd
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
 from evidently.calculations.data_quality import get_rows_count
+from evidently.core import IncludeTags
+from evidently.core import pydantic_type_validator
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import CounterData
@@ -23,17 +28,50 @@ from evidently.renderers.html_widgets import histogram
 from evidently.renderers.html_widgets import table_data
 from evidently.renderers.html_widgets import widget_tabs
 
+NoneKey = type("NoneKey", tuple(), {})
 
-@dataclass
-class DatasetMissingValues:
+
+@pydantic_type_validator(NoneKey)
+def null_valudator(value):
+    if value is None or value == "null":
+        return None
+    raise ValueError("not a None")
+
+
+MissingValue = Union[np.double, NoneKey, Any]  # type: ignore[valid-type]
+
+
+class DatasetMissingValues(MetricResult):
     """Statistics about missed values in a dataset"""
 
+    class Config:
+        type_alias = "evidently:metric_result:DatasetMissingValues"
+        pd_exclude_fields = {
+            "different_missing_values_by_column",
+            "different_missing_values",
+            "number_of_different_missing_values_by_column",
+            "number_of_missing_values_by_column",
+            "share_of_missing_values_by_column",
+            "columns_with_missing_values",
+        }
+
+        field_tags = {
+            "different_missing_values": {IncludeTags.Extra},
+            "different_missing_values_by_column": {IncludeTags.Extra},
+            "number_of_different_missing_values_by_column": {IncludeTags.Extra},
+            "number_of_missing_values_by_column": {IncludeTags.Extra},
+            "share_of_missing_values_by_column": {IncludeTags.Extra},
+            "number_of_rows": {IncludeTags.Extra},
+            "number_of_columns": {IncludeTags.Extra},
+            "columns_with_missing_values": {IncludeTags.Extra},
+        }
+
     # set of different missing values in the dataset
-    different_missing_values: Dict[Any, int]
+    different_missing_values: Dict[MissingValue, int]
     # number of different missing values in the dataset
     number_of_different_missing_values: int
     # set of different missing values for each column
-    different_missing_values_by_column: Dict[str, Dict[Any, int]]
+    different_missing_values_by_column: Dict[str, Dict[MissingValue, int]]
     # count of different missing values for each column
     number_of_different_missing_values_by_column: Dict[str, int]
     # count of missing values in all dataset
@@ -60,13 +98,19 @@ class DatasetMissingValues:
     share_of_columns_with_missing_values: float
 
 
-@dataclass
-class DatasetMissingValuesMetricResult:
+class DatasetMissingValuesMetricResult(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:DatasetMissingValuesMetricResult"
+        field_tags = {"current": {IncludeTags.Current}, "reference": {IncludeTags.Reference}}
+
     current: DatasetMissingValues
     reference: Optional[DatasetMissingValues] = None
 
 
 class DatasetMissingValuesMetric(Metric[DatasetMissingValuesMetricResult]):
+    class Config:
+        type_alias = "evidently:metric:DatasetMissingValuesMetric"
+
     """Count missing values in a dataset.
 
     Missing value is a null or NaN value.
@@ -82,20 +126,24 @@ class DatasetMissingValuesMetric(Metric[DatasetMissingValuesMetricResult]):
     """
 
     # default missing values list
-    DEFAULT_MISSING_VALUES = ["", np.inf, -np.inf, None]
-    missing_values: frozenset
+    DEFAULT_MISSING_VALUES: ClassVar = ["", np.inf, -np.inf, None]
+    missing_values: FrozenSet[MissingValue]
 
-    def __init__(self, missing_values: Optional[list] = None, replace: bool = True) -> None:
+    def __init__(self, missing_values: Optional[list] = None, replace: bool = True, options: AnyOptions = None) -> None:
+        _missing_values: list
         if missing_values is None:
             # use default missing values list if we have no user-defined values
-            missing_values = self.DEFAULT_MISSING_VALUES
+            _missing_values = self.DEFAULT_MISSING_VALUES
 
         elif not replace:
             # add default values to the user-defined list
-            missing_values = self.DEFAULT_MISSING_VALUES + missing_values
+            _missing_values = self.DEFAULT_MISSING_VALUES + missing_values
+        else:
+            _missing_values = missing_values
 
         # use frozenset because metrics parameters should be immutable/hashable for deduplication
-        self.missing_values = frozenset(missing_values)
+        self.missing_values = frozenset(_missing_values)
+        super().__init__(options=options)
 
     def _calculate_missing_values_stats(self, dataset: pd.DataFrame) -> DatasetMissingValues:
         different_missing_values = {value: 0 for value in self.missing_values}
@@ -137,16 +185,10 @@ class DatasetMissingValuesMetric(Metric[DatasetMissingValuesMetricResult]):
                     # add the column to set of columns with a missing value
                     columns_with_missing_values.add(column_name)
 
-        for _, row in dataset.iterrows():
-            for missing_value in self.missing_values:
-                if None in self.missing_values and row.isnull().any():
-                    # check pandas null values
-                    number_of_rows_with_missing_values += 1
-                    break
-
-                elif missing_value in row.values:
-                    number_of_rows_with_missing_values += 1
-                    break
+        dsf = dataset.isin(self.missing_values)
+        if None in self.missing_values:
+            dsf = dsf | dataset.isnull()
+        number_of_rows_with_missing_values = dsf.any(axis="columns").sum()
 
         if number_of_rows == 0:
             share_of_missing_values_by_column = {}
@@ -219,9 +261,6 @@ class DatasetMissingValuesMetric(Metric[DatasetMissingValuesMetricResult]):
 
 @default_renderer(wrap_type=DatasetMissingValuesMetric)
 class DatasetMissingValuesMetricRenderer(MetricRenderer):
-    def render_json(self, obj: DatasetMissingValuesMetric) -> dict:
-        return dataclasses.asdict(obj.get_result().current)
-
     def _get_table_stat(self, dataset_name: str, stats: DatasetMissingValues) -> BaseWidgetInfo:
         matched_stat = [(k, v) for k, v in stats.number_of_missing_values_by_column.items()]
         matched_stat = sorted(matched_stat, key=lambda x: x[1], reverse=True)
@@ -235,8 +274,8 @@ class DatasetMissingValuesMetricRenderer(MetricRenderer):
             title="",
             primary_hist=HistogramData(
                 name="",
-                x=list(stats.number_of_missing_values_by_column.keys()),
-                y=list(stats.number_of_missing_values_by_column.values()),
+                x=pd.Series(stats.number_of_missing_values_by_column.keys()),
+                count=pd.Series(stats.number_of_missing_values_by_column.values()),
             ),
             color_options=self.color_options,
         )
@@ -258,11 +297,17 @@ class DatasetMissingValuesMetricRenderer(MetricRenderer):
 
     def _get_overall_missing_values_info(self, metric_result: DatasetMissingValuesMetricResult) -> BaseWidgetInfo:
         counters = [
-            CounterData.string("Missing values (Current data)", self._get_info_string(metric_result.current)),
+            CounterData.string(
+                "Missing values (Current data)",
+                self._get_info_string(metric_result.current),
+            ),
         ]
         if metric_result.reference is not None:
             counters.append(
-                CounterData.string("Missing values (Reference data)", self._get_info_string(metric_result.reference)),
+                CounterData.string(
+                    "Missing values (Reference data)",
+                    self._get_info_string(metric_result.reference),
+                ),
             )
 
         return counter(

@@ -1,14 +1,15 @@
-import dataclasses
 from typing import List
 from typing import Optional
-from typing import Union
 
 from evidently.base_metric import InputData
-from evidently.calculations.classification_performance import DatasetClassificationQuality
+from evidently.base_metric import MetricResult
 from evidently.calculations.classification_performance import calculate_metrics
+from evidently.core import IncludeTags
+from evidently.metric_results import DatasetClassificationQuality
 from evidently.metrics.classification_performance.base_classification_metric import ThresholdClassificationMetric
 from evidently.metrics.classification_performance.confusion_matrix_metric import ClassificationConfusionMatrix
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import CounterData
@@ -17,23 +18,34 @@ from evidently.renderers.html_widgets import header_text
 from evidently.utils.data_operations import process_columns
 
 
-@dataclasses.dataclass
-class ClassificationQualityMetricResult:
+class ClassificationQualityMetricResult(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:ClassificationQualityMetricResult"
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "target_name": {IncludeTags.Parameter},
+        }
+
     current: DatasetClassificationQuality
     reference: Optional[DatasetClassificationQuality]
     target_name: str
 
 
 class ClassificationQualityMetric(ThresholdClassificationMetric[ClassificationQualityMetricResult]):
-    confusion_matrix_metric: ClassificationConfusionMatrix
+    class Config:
+        type_alias = "evidently:metric:ClassificationQualityMetric"
+
+    _confusion_matrix_metric: ClassificationConfusionMatrix
 
     def __init__(
         self,
         probas_threshold: Optional[float] = None,
-        k: Optional[Union[float, int]] = None,
+        k: Optional[int] = None,
+        options: AnyOptions = None,
     ):
-        super().__init__(probas_threshold=probas_threshold, k=k)
-        self.confusion_matrix_metric = ClassificationConfusionMatrix(probas_threshold=probas_threshold, k=k)
+        self._confusion_matrix_metric = ClassificationConfusionMatrix(probas_threshold=probas_threshold, k=k)
+        super().__init__(probas_threshold=probas_threshold, k=k, options=options)
 
     def calculate(self, data: InputData) -> ClassificationQualityMetricResult:
         dataset_columns = process_columns(data.current_data, data.column_mapping)
@@ -44,16 +56,16 @@ class ClassificationQualityMetric(ThresholdClassificationMetric[ClassificationQu
         target, prediction = self.get_target_prediction_data(data.current_data, data.column_mapping)
         current = calculate_metrics(
             data.column_mapping,
-            self.confusion_matrix_metric.get_result().current_matrix,
+            self._confusion_matrix_metric.get_result().current_matrix,
             target,
             prediction,
         )
 
         reference = None
         if data.reference_data is not None:
-            ref_matrix = self.confusion_matrix_metric.get_result().reference_matrix
+            ref_matrix = self._confusion_matrix_metric.get_result().reference_matrix
             if ref_matrix is None:
-                raise ValueError(f"Dependency {self.confusion_matrix_metric.__class__} should have reference data")
+                raise ValueError(f"Dependency {self._confusion_matrix_metric.__class__} should have reference data")
             target, prediction = self.get_target_prediction_data(data.reference_data, data.column_mapping)
             reference = calculate_metrics(
                 data.column_mapping,
@@ -62,15 +74,13 @@ class ClassificationQualityMetric(ThresholdClassificationMetric[ClassificationQu
                 prediction,
             )
 
-        return ClassificationQualityMetricResult(current=current, reference=reference, target_name=target_name)
+        result = ClassificationQualityMetricResult(current=current, reference=reference, target_name=target_name)
+
+        return result
 
 
 @default_renderer(wrap_type=ClassificationQualityMetric)
 class ClassificationQualityMetricRenderer(MetricRenderer):
-    def render_json(self, obj: ClassificationQualityMetric) -> dict:
-        result = dataclasses.asdict(obj.get_result())
-        return result
-
     def render_html(self, obj: ClassificationQualityMetric) -> List[BaseWidgetInfo]:
         metric_result = obj.get_result()
         target_name = metric_result.target_name

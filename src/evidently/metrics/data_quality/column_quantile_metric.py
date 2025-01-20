@@ -1,143 +1,169 @@
-import dataclasses
 from typing import List
 from typing import Optional
+from typing import Union
 
+import numpy as np
 import pandas as pd
 
+from evidently.base_metric import ColumnMetricResult
+from evidently.base_metric import ColumnName
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
+from evidently.core import ColumnType
+from evidently.core import IncludeTags
+from evidently.metric_results import Distribution
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import CounterData
 from evidently.renderers.html_widgets import HistogramData
 from evidently.renderers.html_widgets import counter
-from evidently.renderers.html_widgets import get_histogram_figure_with_quantile
 from evidently.renderers.html_widgets import header_text
 from evidently.renderers.html_widgets import plotly_figure
-from evidently.utils.visualizations import Distribution
 from evidently.utils.visualizations import get_distribution_for_column
+from evidently.utils.visualizations import plot_distr_with_cond_perc_button
 
 
-@dataclasses.dataclass
-class ColumnQuantileMetricResult:
-    column_name: str
+class QuantileStats(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:QuantileStats"
+
+    value: float
+    # calculated value of the quantile
+    distribution: Distribution
+    # distribution for the column
+
+
+class ColumnQuantileMetricResult(ColumnMetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:ColumnQuantileMetricResult"
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "quantile": {IncludeTags.Parameter},
+        }
+
     # range of the quantile (from 0 to 1)
     quantile: float
-    # calculated value of the quantile in current data
-    current: float
-    # calculated value of the quantile in reference data
-    # distribution for the column in current
-    current_distribution: Distribution
-    reference: Optional[float] = None
-    # distribution for the column in reference
-    reference_distribution: Optional[Distribution] = None
+    current: QuantileStats
+    reference: Optional[QuantileStats] = None
 
 
 class ColumnQuantileMetric(Metric[ColumnQuantileMetricResult]):
+    class Config:
+        type_alias = "evidently:metric:ColumnQuantileMetric"
+
     """Calculates quantile with specified range"""
 
-    column_name: str
+    column_name: ColumnName
     quantile: float
 
-    def __init__(self, column_name: str, quantile: float) -> None:
+    def __init__(self, column_name: Union[str, ColumnName], quantile: float, options: AnyOptions = None) -> None:
         self.quantile = quantile
-        self.column_name = column_name
+        self.column_name = ColumnName.from_any(column_name)
+        super().__init__(options=options)
 
     def calculate(self, data: InputData) -> ColumnQuantileMetricResult:
         if not 0 < self.quantile <= 1:
             raise ValueError("Quantile should all be in the interval (0, 1].")
 
-        if self.column_name not in data.current_data:
-            raise ValueError(f"Column '{self.column_name}' is not in current data.")
+        if not data.has_column(self.column_name):
+            raise ValueError(f"Column '{self.column_name}' is not in data.")
 
-        current_column = data.current_data[self.column_name]
+        column_type, current_column, reference_column = data.get_data(self.column_name)
 
         if not pd.api.types.is_numeric_dtype(current_column.dtype):
             raise ValueError(f"Column '{self.column_name}' in current data is not numeric.")
 
-        current_quantile = data.current_data[self.column_name].quantile(self.quantile)
+        current_quantile = current_column.quantile(self.quantile)
 
-        if data.reference_data is not None:
-            if self.column_name not in data.reference_data:
-                raise ValueError(f"Column '{self.column_name}' is not in reference data.")
-
-            reference_column = data.reference_data[self.column_name]
-
+        if reference_column is not None:
             if not pd.api.types.is_numeric_dtype(reference_column.dtype):
                 raise ValueError(f"Column '{self.column_name}' in reference data is not numeric.")
 
             reference_quantile = reference_column.quantile(self.quantile)
+            reference_column = reference_column.replace([np.inf, -np.inf], np.nan)
 
         else:
             reference_column = None
             reference_quantile = None
 
         distributions = get_distribution_for_column(
-            column_type="num", current=current_column, reference=reference_column
+            column_type="num", current=current_column.replace([np.inf, -np.inf], np.nan), reference=reference_column
         )
+        reference = None
+        if reference_quantile is not None:
+            reference = QuantileStats(
+                value=reference_quantile,
+                distribution=distributions[1],
+            )
         return ColumnQuantileMetricResult(
-            column_name=self.column_name,
-            current=current_quantile,
+            column_name=self.column_name.display_name,
+            column_type=ColumnType.Numerical.value,
+            current=QuantileStats(
+                value=current_quantile,
+                distribution=distributions[0],
+            ),
             quantile=self.quantile,
-            current_distribution=distributions[0],
-            reference_distribution=distributions[1],
-            reference=reference_quantile,
+            reference=reference,
         )
 
 
 @default_renderer(wrap_type=ColumnQuantileMetric)
 class ColumnQuantileMetricRenderer(MetricRenderer):
-    def render_json(self, obj: ColumnQuantileMetric) -> dict:
-        result = dataclasses.asdict(obj.get_result())
-        result.pop("current_distribution", None)
-        result.pop("reference_distribution", None)
-        return result
-
     @staticmethod
     def _get_counters(metric_result: ColumnQuantileMetricResult) -> BaseWidgetInfo:
         counters = [
             CounterData.float(label="Quantile", value=metric_result.quantile, precision=3),
-            CounterData.float(label="Quantile value (current)", value=metric_result.current, precision=3),
+            CounterData.float(
+                label="Quantile value (current)",
+                value=metric_result.current.value,
+                precision=3,
+            ),
         ]
 
         if metric_result.reference is not None:
             counters.append(
-                CounterData.float(label="Quantile value (reference)", value=metric_result.reference, precision=3),
+                CounterData.float(
+                    label="Quantile value (reference)",
+                    value=metric_result.reference.value,
+                    precision=3,
+                ),
             )
         return counter(counters=counters)
 
     def _get_histogram(self, metric_result: ColumnQuantileMetricResult) -> BaseWidgetInfo:
-        if metric_result.reference_distribution is not None:
-            reference_histogram_data: Optional[HistogramData] = HistogramData(
+        if metric_result.reference is not None:
+            reference_histogram_data: Optional[HistogramData] = HistogramData.from_distribution(
+                metric_result.reference.distribution,
                 name="reference",
-                x=list(metric_result.reference_distribution.x),
-                y=list(metric_result.reference_distribution.y),
             )
 
         else:
             reference_histogram_data = None
 
         if metric_result.reference is not None:
-            reference_quantile: Optional[float] = metric_result.reference
+            reference_quantile: Optional[float] = metric_result.reference.value
 
         else:
             reference_quantile = None
 
-        figure = get_histogram_figure_with_quantile(
-            current=HistogramData(
-                name="current",
-                x=list(metric_result.current_distribution.x),
-                y=list(metric_result.current_distribution.y),
-            ),
-            reference=reference_histogram_data,
-            current_quantile=metric_result.current,
-            reference_quantile=reference_quantile,
+        figure = plot_distr_with_cond_perc_button(
+            hist_curr=HistogramData.from_distribution(metric_result.current.distribution),
+            hist_ref=reference_histogram_data,
+            xaxis_name="",
+            yaxis_name="Count",
+            yaxis_name_perc="Percent",
             color_options=self.color_options,
-        )
-        figure.update_layout(
-            yaxis_title="count",
-            xaxis_title=metric_result.column_name,
+            to_json=False,
+            condition=None,
+            lt=metric_result.current.value,
+            gt=reference_quantile,
+            fill=False,
+            dict_rename={"lt": "current quantile", "gt": "reference_quantile"},
+            dict_style={"current quantile": "solid"},
         )
         return plotly_figure(title="", figure=figure)
 

@@ -1,4 +1,3 @@
-import dataclasses
 from typing import Dict
 from typing import Iterable
 from typing import List
@@ -10,6 +9,9 @@ from plotly import figure_factory as ff
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
+from evidently.base_metric import MetricResult
+from evidently.calculations.classification_performance import get_prediction_data
+from evidently.core import IncludeTags
 from evidently.model.widget import BaseWidgetInfo
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
@@ -19,18 +21,27 @@ from evidently.renderers.html_widgets import plotly_graph_tabs
 from evidently.utils.data_operations import process_columns
 
 
-@dataclasses.dataclass
-class ClassificationProbDistributionResults:
-    current_distribution: Optional[Dict[str, list]]
+class ClassificationProbDistributionResults(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:ClassificationProbDistributionResults"
+        dict_include = False
+        pd_include = False
+        tags = {IncludeTags.Render}
+
+        field_tags = {"current_distribution": {IncludeTags.Current}, "reference_distribution": {IncludeTags.Reference}}
+
+    current_distribution: Optional[Dict[str, list]]  # todo use DistributionField?
     reference_distribution: Optional[Dict[str, list]]
 
 
 class ClassificationProbDistribution(Metric[ClassificationProbDistributionResults]):
+    class Config:
+        type_alias = "evidently:metric:ClassificationProbDistribution"
+
     @staticmethod
     def get_distribution(dataset: pd.DataFrame, target_name: str, prediction_labels: Iterable) -> Dict[str, list]:
         result = {}
         dataset.replace([np.inf, -np.inf], np.nan, inplace=True)
-
         for label in prediction_labels:
             result[label] = [
                 dataset[dataset[target_name] == label][label],
@@ -47,17 +58,34 @@ class ClassificationProbDistribution(Metric[ClassificationProbDistributionResult
         if target is None:
             raise ValueError("Target column should be present")
 
-        if not isinstance(prediction, Iterable) or isinstance(prediction, str):
+        if prediction is None:
+            raise ValueError("Prediction column should be present")
+
+        curr_predictions = get_prediction_data(data.current_data, columns, data.column_mapping.pos_label)
+        if curr_predictions.prediction_probas is None:
             current_distribution = None
             reference_distribution = None
 
         else:
             current_data_copy = data.current_data.copy()
-            current_distribution = self.get_distribution(current_data_copy, target, prediction)
+            for col in curr_predictions.prediction_probas.columns:
+                current_data_copy[col] = curr_predictions.prediction_probas[col]
+
+            current_distribution = self.get_distribution(
+                current_data_copy, target, curr_predictions.prediction_probas.columns
+            )
 
             if data.reference_data is not None:
-                reference_data_copy = data.reference_data.copy()
-                reference_distribution = self.get_distribution(reference_data_copy, target, prediction)
+                ref_predictions = get_prediction_data(data.reference_data, columns, data.column_mapping.pos_label)
+                if ref_predictions.prediction_probas is None:
+                    reference_distribution = None
+                else:
+                    reference_data_copy = data.reference_data.copy()
+                    for col in ref_predictions.prediction_probas.columns:
+                        reference_data_copy[col] = ref_predictions.prediction_probas[col]
+                    reference_distribution = self.get_distribution(
+                        reference_data_copy, target, ref_predictions.prediction_probas.columns
+                    )
 
             else:
                 reference_distribution = None
@@ -70,9 +98,6 @@ class ClassificationProbDistribution(Metric[ClassificationProbDistributionResult
 
 @default_renderer(wrap_type=ClassificationProbDistribution)
 class ClassificationProbDistributionRenderer(MetricRenderer):
-    def render_json(self, obj: ClassificationProbDistribution) -> dict:
-        return {}
-
     def _plot(self, distribution: Dict[str, list]):
         # plot distributions
         graphs = []
@@ -81,7 +106,10 @@ class ClassificationProbDistributionRenderer(MetricRenderer):
             pred_distr = ff.create_distplot(
                 distribution[label],
                 [str(label), "other"],
-                colors=[self.color_options.primary_color, self.color_options.secondary_color],
+                colors=[
+                    self.color_options.primary_color,
+                    self.color_options.secondary_color,
+                ],
                 bin_size=0.05,
                 show_curve=False,
                 show_rug=True,

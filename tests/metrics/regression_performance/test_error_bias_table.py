@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evidently import ColumnMapping
 from evidently.metrics import RegressionErrorBiasTable
+from evidently.options.agg_data import RenderOptions
+from evidently.options.base import Options
+from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.report import Report
 
 
@@ -54,7 +56,7 @@ def test_regression_error_bias_table_value_errors(
     data_mapping = ColumnMapping()
 
     with pytest.raises(ValueError) as error:
-        report = Report(metrics=[metric])
+        report = Report(metrics=[metric], options=Options(render=RenderOptions(raw_data=True)))
         report.run(current_data=current_dataset, reference_data=reference_dataset, column_mapping=data_mapping)
         metric.get_result()
 
@@ -70,7 +72,7 @@ def test_regression_error_bias_table_value_errors(
             RegressionErrorBiasTable(),
             {
                 "cat_feature_names": [],
-                "columns": ["prediction", "target"],
+                "columns": [],
                 "error_bias": {},
                 "num_feature_names": [],
                 "prediction_name": "prediction",
@@ -79,7 +81,7 @@ def test_regression_error_bias_table_value_errors(
             },
         ),
         (
-            pd.DataFrame({"target": [1, np.NaN, 3], "prediction": [1, 2, 3], "feature": [np.NaN, "a", np.NaN]}),
+            pd.DataFrame({"target": [1, np.nan, 3], "prediction": [1, 2, 3], "feature": [np.nan, "a", np.nan]}),
             pd.DataFrame(
                 {
                     "target": [10, 20, 3.5],
@@ -90,7 +92,7 @@ def test_regression_error_bias_table_value_errors(
             RegressionErrorBiasTable(),
             {
                 "cat_feature_names": ["feature"],
-                "columns": ["feature", "prediction", "target"],
+                "columns": ["feature"],
                 "error_bias": {
                     "feature": {
                         "current_majority": None,
@@ -115,7 +117,7 @@ def test_regression_error_bias_table_value_errors(
 def test_regression_error_bias_table_with_report(
     current_data: pd.DataFrame, reference_data: pd.DataFrame, metric: RegressionErrorBiasTable, expected_json: dict
 ) -> None:
-    report = Report(metrics=[metric])
+    report = Report(metrics=[metric], options=Options(render=RenderOptions(raw_data=True)))
     report.run(current_data=current_data, reference_data=reference_data, column_mapping=ColumnMapping())
     assert report.show()
     result_json = report.json()

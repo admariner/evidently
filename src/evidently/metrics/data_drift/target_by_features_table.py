@@ -1,4 +1,3 @@
-import dataclasses
 import json
 from typing import Dict
 from typing import List
@@ -9,52 +8,76 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objs as go
+from pandas.api.types import is_integer_dtype
 from pandas.api.types import is_string_dtype
 from plotly.subplots import make_subplots
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
-from evidently.calculations.classification_performance import PredictionData
+from evidently.base_metric import MetricResult
+from evidently.base_metric import UsesRawDataMixin
 from evidently.calculations.classification_performance import get_prediction_data
+from evidently.core import ColumnType
+from evidently.core import IncludeTags
 from evidently.features.non_letter_character_percentage_feature import NonLetterCharacterPercentage
 from evidently.features.OOV_words_percentage_feature import OOVWordsPercentage
 from evidently.features.text_length_feature import TextLength
+from evidently.metric_results import StatsByFeature
 from evidently.model.widget import AdditionalGraphInfo
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.utils.data_operations import process_columns
 from evidently.utils.data_preprocessing import DataDefinition
 
 
-@dataclasses.dataclass
-class TargetByFeaturesTableResults:
-    current_plot_data: pd.DataFrame
-    reference_plot_data: pd.DataFrame
+class TargetByFeaturesTableResults(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:TargetByFeaturesTableResults"
+        dict_include = False
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "target_name": {IncludeTags.Parameter},
+            "columns": {IncludeTags.Parameter},
+            "task": {IncludeTags.Parameter},
+        }
+
+    current: StatsByFeature
+    reference: Optional[StatsByFeature]
     target_name: Optional[str]
-    curr_predictions: Optional[PredictionData]
-    ref_predictions: Optional[PredictionData]
     columns: List[str]
     task: str
 
 
-class TargetByFeaturesTable(Metric[TargetByFeaturesTableResults]):
+class TargetByFeaturesTable(UsesRawDataMixin, Metric[TargetByFeaturesTableResults]):
+    class Config:
+        type_alias = "evidently:metric:TargetByFeaturesTable"
+
     columns: Optional[List[str]]
-    text_features_gen: Optional[
-        Dict[str, Dict[str, Union[TextLength, NonLetterCharacterPercentage, OOVWordsPercentage]]]
+    _text_features_gen: Optional[
+        Dict[
+            str,
+            Dict[str, Union[TextLength, NonLetterCharacterPercentage, OOVWordsPercentage]],
+        ]
     ]
 
-    def __init__(self, columns: Optional[List[str]] = None):
+    def __init__(self, columns: Optional[List[str]] = None, options: AnyOptions = None):
         self.columns = columns
-        self.text_features_gen = None
+        super().__init__(options=options)
+        self._text_features_gen = None
 
     def required_features(self, data_definition: DataDefinition):
-        if len(data_definition.get_columns("text_features")) > 0:
-            text_cols = [col.column_name for col in data_definition.get_columns("text_features")]
+        if len(data_definition.get_columns(ColumnType.Text, features_only=True)) > 0:
+            text_cols = [col.column_name for col in data_definition.get_columns(ColumnType.Text, features_only=True)]
             text_features_gen = {}
             text_features_gen_result = []
             for col in text_cols:
-                col_dict: Dict[str, Union[TextLength, NonLetterCharacterPercentage, OOVWordsPercentage]] = {}
+                col_dict: Dict[
+                    str,
+                    Union[TextLength, NonLetterCharacterPercentage, OOVWordsPercentage],
+                ] = {}
                 col_dict[f"{col}: Text Length"] = TextLength(col)
                 col_dict[f"{col}: Non Letter Character %"] = NonLetterCharacterPercentage(col)
                 col_dict[f"{col}: OOV %"] = OOVWordsPercentage(col)
@@ -65,7 +88,7 @@ class TargetByFeaturesTable(Metric[TargetByFeaturesTableResults]):
                     col_dict[f"{col}: OOV %"],
                 ]
                 text_features_gen[col] = col_dict
-            self.text_features_gen = text_features_gen
+            self._text_features_gen = text_features_gen
 
             return text_features_gen_result
         else:
@@ -75,6 +98,14 @@ class TargetByFeaturesTable(Metric[TargetByFeaturesTableResults]):
         return ()
 
     def calculate(self, data: InputData) -> TargetByFeaturesTableResults:
+        if not self.get_options().render_options.raw_data:
+            return TargetByFeaturesTableResults(
+                current=StatsByFeature(plot_data=pd.DataFrame()),
+                reference=None,
+                target_name=None,
+                columns=[],
+                task="",
+            )
         dataset_columns = process_columns(data.current_data, data.column_mapping)
         target_name = dataset_columns.utility_columns.target
         prediction_name = dataset_columns.utility_columns.prediction
@@ -115,39 +146,66 @@ class TargetByFeaturesTable(Metric[TargetByFeaturesTableResults]):
                     task = "classification"
                 else:
                     task = "regression"
+            elif curr_predictions is not None:
+                if is_string_dtype(curr_predictions.predictions) or (
+                    is_integer_dtype(curr_predictions.predictions) and curr_predictions.predictions.nunique() < 5
+                ):
+                    task = "classification"
+                else:
+                    task = "regression"
             else:
                 raise ValueError("Task parameter of column_mapping should be specified")
         # process text columns
         if (
-            self.text_features_gen is not None
-            and len(np.intersect1d(list(self.text_features_gen.keys()), columns)) >= 1
+            self._text_features_gen is not None
+            and len(np.intersect1d(list(self._text_features_gen.keys()), columns)) >= 1
         ):
-            for col in np.intersect1d(list(self.text_features_gen.keys()), columns):
-                columns += list(self.text_features_gen[col].keys())
+            for col in np.intersect1d(list(self._text_features_gen.keys()), columns):
+                columns += list(self._text_features_gen[col].keys())
                 columns.remove(col)
                 curr_text_df = pd.concat(
-                    [data.get_current_column(x.feature_name()) for x in list(self.text_features_gen[col].values())],
+                    [data.get_current_column(x.as_column()) for x in list(self._text_features_gen[col].values())],
                     axis=1,
                 )
-                curr_text_df.columns = list(self.text_features_gen[col].keys())
-                curr_df = pd.concat([curr_df.reset_index(drop=True), curr_text_df.reset_index(drop=True)], axis=1)
+                curr_text_df.columns = pd.Index(list(self._text_features_gen[col].keys()))
+                curr_df = pd.concat(
+                    [
+                        curr_df.reset_index(drop=True),
+                        curr_text_df.reset_index(drop=True),
+                    ],
+                    axis=1,
+                )
 
                 if ref_df is not None:
                     ref_text_df = pd.concat(
+                        [data.get_reference_column(x.as_column()) for x in list(self._text_features_gen[col].values())],
+                        axis=1,
+                    )
+                    ref_text_df.columns = pd.Index(list(self._text_features_gen[col].keys()))
+                    ref_df = pd.concat(
                         [
-                            data.get_reference_column(x.feature_name())
-                            for x in list(self.text_features_gen[col].values())
+                            ref_df.reset_index(drop=True),
+                            ref_text_df.reset_index(drop=True),
                         ],
                         axis=1,
                     )
-                    ref_text_df.columns = list(self.text_features_gen[col].keys())
-                    ref_df = pd.concat([ref_df.reset_index(drop=True), ref_text_df.reset_index(drop=True)], axis=1)
+        table_columns = columns.copy()
+        if target_name is not None:
+            table_columns += [target_name]
+        if prediction_name is not None and isinstance(prediction_name, str):
+            table_columns += [prediction_name]
+        if prediction_name is not None and isinstance(prediction_name, list):
+            table_columns += prediction_name
 
         return TargetByFeaturesTableResults(
-            current_plot_data=curr_df,
-            reference_plot_data=ref_df,
-            curr_predictions=curr_predictions,
-            ref_predictions=ref_predictions,
+            current=StatsByFeature(
+                plot_data=curr_df[table_columns],
+                predictions=curr_predictions,
+            ),
+            reference=StatsByFeature(
+                plot_data=ref_df[table_columns],
+                predictions=ref_predictions,
+            ),
             columns=columns,
             target_name=target_name,
             task=task,
@@ -156,19 +214,21 @@ class TargetByFeaturesTable(Metric[TargetByFeaturesTableResults]):
 
 @default_renderer(wrap_type=TargetByFeaturesTable)
 class TargetByFeaturesTableRenderer(MetricRenderer):
-    def render_json(self, obj: TargetByFeaturesTable) -> dict:
-        return {}
-
     def render_html(self, obj: TargetByFeaturesTable) -> List[BaseWidgetInfo]:
+        if not obj.get_options().render_options.raw_data:
+            return []
         result = obj.get_result()
-        current_data = result.current_plot_data
-        reference_data = result.reference_plot_data
+        current_data = result.current.plot_data
+        # todo: better typing
+        assert current_data is not None
+        if result.reference is None:
+            raise ValueError("reference is not set but required")
+        reference_data = result.reference.plot_data
         target_name = result.target_name
-        curr_predictions = result.curr_predictions
-        ref_predictions = result.ref_predictions
+        curr_predictions = result.current.predictions
+        ref_predictions = result.reference.predictions
         columns = result.columns
         task = result.task
-
         if curr_predictions is not None and ref_predictions is not None:
             current_data["prediction_labels"] = curr_predictions.predictions.values
             reference_data["prediction_labels"] = ref_predictions.predictions.values
@@ -192,7 +252,10 @@ class TargetByFeaturesTableRenderer(MetricRenderer):
                 additional_graphs_data.append(
                     AdditionalGraphInfo(
                         feature_name + "_target_values",
-                        {"data": target_fig_json["data"], "layout": target_fig_json["layout"]},
+                        {
+                            "data": target_fig_json["data"],
+                            "layout": target_fig_json["layout"],
+                        },
                     )
                 )
 
@@ -211,7 +274,10 @@ class TargetByFeaturesTableRenderer(MetricRenderer):
                 additional_graphs_data.append(
                     AdditionalGraphInfo(
                         feature_name + "_prediction_values",
-                        {"data": preds_fig_json["data"], "layout": preds_fig_json["layout"]},
+                        {
+                            "data": preds_fig_json["data"],
+                            "layout": preds_fig_json["layout"],
+                        },
                     )
                 )
 

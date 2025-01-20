@@ -1,54 +1,83 @@
-import dataclasses
 from typing import Dict
 from typing import List
 from typing import Optional
-from typing import Union
 
 import pandas as pd
 
 from evidently.base_metric import InputData
 from evidently.base_metric import Metric
-from evidently.calculations.data_quality import ColumnCorrelations
-from evidently.calculations.data_quality import calculate_numerical_column_correlations
-from evidently.features.non_letter_character_percentage_feature import NonLetterCharacterPercentage
-from evidently.features.OOV_words_percentage_feature import OOVWordsPercentage
-from evidently.features.text_length_feature import TextLength
+from evidently.base_metric import MetricResult
+from evidently.calculations.data_quality import calculate_numerical_correlation
+from evidently.core import ColumnType
+from evidently.core import ColumnType as ColumnType_data
+from evidently.core import IncludeTags
+from evidently.descriptors import OOV
+from evidently.descriptors import NonLetterCharacterPercentage
+from evidently.descriptors import TextLength
+from evidently.features.generated_features import FeatureDescriptor
+from evidently.features.generated_features import GeneratedFeature
+from evidently.metric_results import ColumnCorrelations
 from evidently.model.widget import BaseWidgetInfo
+from evidently.options.base import AnyOptions
 from evidently.renderers.base_renderer import MetricRenderer
 from evidently.renderers.base_renderer import default_renderer
 from evidently.renderers.html_widgets import TabData
 from evidently.renderers.html_widgets import get_histogram_for_distribution
 from evidently.renderers.html_widgets import header_text
 from evidently.renderers.html_widgets import widget_tabs
-from evidently.utils.data_operations import process_columns
-from evidently.utils.data_preprocessing import ColumnType as ColumnType_data
 from evidently.utils.data_preprocessing import DataDefinition
 
 
-@dataclasses.dataclass
-class TextDescriptorsCorrelationMetricResult:
+class TextDescriptorsCorrelationMetricResult(MetricResult):
+    class Config:
+        type_alias = "evidently:metric_result:TextDescriptorsCorrelationMetricResult"
+        pd_include = False
+        field_tags = {
+            "current": {IncludeTags.Current},
+            "reference": {IncludeTags.Reference},
+            "column_name": {IncludeTags.Parameter},
+        }
+
     column_name: str
     current: Dict[str, Dict[str, ColumnCorrelations]]
     reference: Optional[Dict[str, Dict[str, ColumnCorrelations]]] = None
 
 
 class TextDescriptorsCorrelationMetric(Metric[TextDescriptorsCorrelationMetricResult]):
+    class Config:
+        type_alias = "evidently:metric:TextDescriptorsCorrelationMetric"
+
     """Calculates correlations between each auto-generated text feature for column_name and other dataset columns"""
 
     column_name: str
-    generated_text_features: Dict[str, Union[TextLength, NonLetterCharacterPercentage, OOVWordsPercentage]]
+    _generated_text_features: Dict[str, GeneratedFeature]
+    descriptors: Dict[str, FeatureDescriptor]
 
-    def __init__(self, column_name: str) -> None:
+    def __init__(
+        self, column_name: str, descriptors: Optional[Dict[str, FeatureDescriptor]] = None, options: AnyOptions = None
+    ) -> None:
         self.column_name = column_name
-        self.generated_text_features = {}
+        if descriptors:
+            self.descriptors = descriptors
+        else:
+            self.descriptors = {
+                "Text Length": TextLength(),
+                "Non Letter Character %": NonLetterCharacterPercentage(),
+                "OOV %": OOV(),
+            }
+        super().__init__(options=options)
+        self._generated_text_features = {}
+
+    @property
+    def generated_text_features(self):
+        return self._generated_text_features
 
     def required_features(self, data_definition: DataDefinition):
         column_type = data_definition.get_column(self.column_name).column_type
         if column_type == ColumnType_data.Text:
-            self.generated_text_features = {}
-            self.generated_text_features["Text Length"] = TextLength(self.column_name)
-            self.generated_text_features["Non Letter Character %"] = NonLetterCharacterPercentage(self.column_name)
-            self.generated_text_features["OOV %"] = OOVWordsPercentage(self.column_name)
+            self._generated_text_features = {
+                name: desc.feature(self.column_name) for name, desc in self.descriptors.items()
+            }
             return list(self.generated_text_features.values())
         return []
 
@@ -63,27 +92,23 @@ class TextDescriptorsCorrelationMetric(Metric[TextDescriptorsCorrelationMetricRe
             if self.column_name not in data.reference_data:
                 raise ValueError(f"Column '{self.column_name}' was not found in reference data.")
 
-        columns = process_columns(data.current_data, data.column_mapping)
-        correlation_columns = columns.num_feature_names
-
         curr_text_df = pd.concat(
-            [data.get_current_column(x.feature_name()) for x in list(self.generated_text_features.values())],
+            [data.get_current_column(x.as_column()) for x in list(self.generated_text_features.values())],
             axis=1,
         )
-        curr_text_df.columns = list(self.generated_text_features.keys())
-        curr_df = pd.concat(
-            [data.current_data.copy().reset_index(drop=True), curr_text_df.reset_index(drop=True)],
-            axis=1,
-        )
+        curr_text_df.columns = pd.Index(list(self.generated_text_features.keys()))
         ref_df = None
         if data.reference_data is not None:
             ref_text_df = pd.concat(
-                [data.get_reference_column(x.feature_name()) for x in list(self.generated_text_features.values())],
+                [data.get_reference_column(x.as_column()) for x in list(self.generated_text_features.values())],
                 axis=1,
             )
-            ref_text_df.columns = list(self.generated_text_features.keys())
+            ref_text_df.columns = pd.Index(list(self.generated_text_features.keys()))
             ref_df = pd.concat(
-                [data.reference_data.copy().reset_index(drop=True), ref_text_df.reset_index(drop=True)],
+                [
+                    data.reference_data.copy().reset_index(drop=True),
+                    ref_text_df.reset_index(drop=True),
+                ],
                 axis=1,
             )
         curr_result = {}
@@ -91,11 +116,23 @@ class TextDescriptorsCorrelationMetric(Metric[TextDescriptorsCorrelationMetricRe
         if ref_df is not None:
             ref_result = {}
 
-        for col in list(self.generated_text_features.keys()):
-            curr_result[col] = calculate_numerical_column_correlations(col, curr_df, correlation_columns)
+        num_features = data.data_definition.get_columns(ColumnType.Numerical, features_only=True)
+        for name, feature in self.generated_text_features.items():
+            correlations = calculate_numerical_correlation(
+                name,
+                data.get_current_column(feature.as_column()),
+                data.current_data[[feature.column_name for feature in num_features]],
+            )
+            curr_result[name] = {value.kind: value for value in correlations}
             if ref_df is not None and ref_result is not None:
-                ref_result[col] = calculate_numerical_column_correlations(col, ref_df, correlation_columns)
+                correlations = calculate_numerical_correlation(
+                    name,
+                    data.get_reference_column(feature.as_column()),
+                    data.current_data[[feature.column_name for feature in num_features]],
+                )
+                ref_result[name] = {value.kind: value for value in correlations}
 
+        # todo potential performance issues
         return TextDescriptorsCorrelationMetricResult(
             column_name=self.column_name,
             current=curr_result,
@@ -105,14 +142,8 @@ class TextDescriptorsCorrelationMetric(Metric[TextDescriptorsCorrelationMetricRe
 
 @default_renderer(wrap_type=TextDescriptorsCorrelationMetric)
 class TextDescriptorsCorrelationMetricRenderer(MetricRenderer):
-    def render_json(self, obj: TextDescriptorsCorrelationMetric) -> dict:
-        result = dataclasses.asdict(obj.get_result())
-        return result
-
     def _get_plots_correlations(
-        self,
-        curr_metric_result: Dict,
-        ref_metric_result: Optional[Dict],
+        self, curr_metric_result: Dict, ref_metric_result: Optional[Dict]
     ) -> Optional[BaseWidgetInfo]:
         tabs = []
 

@@ -13,15 +13,16 @@ Properties:
 Example:
     Using by object:
 
-    >>> from evidently.options import DataDriftOptions
+    >>> from evidently.options.data_drift import DataDriftOptions
     >>> from evidently.calculations.stattests import psi_stat_test
     >>> options = DataDriftOptions(all_features_stattest=psi_stat_test)
 
     Using by name:
 
-    >>> from evidently.options import DataDriftOptions
+    >>> from evidently.options.data_drift import DataDriftOptions
     >>> options = DataDriftOptions(all_features_stattest="psi")
 """
+
 from typing import Tuple
 
 import numpy as np
@@ -30,10 +31,11 @@ import pandas as pd
 from evidently.calculations.stattests.registry import StatTest
 from evidently.calculations.stattests.registry import register_stattest
 from evidently.calculations.stattests.utils import get_binned_data
+from evidently.core import ColumnType
 
 
 def _psi(
-    reference_data: pd.Series, current_data: pd.Series, feature_type: str, threshold: float, n_bins: int = 30
+    reference_data: pd.Series, current_data: pd.Series, feature_type: ColumnType, threshold: float, n_bins: int = 30
 ) -> Tuple[float, bool]:
     """Calculate the PSI
     Args:
@@ -48,16 +50,8 @@ def _psi(
     """
     reference_percents, current_percents = get_binned_data(reference_data, current_data, feature_type, n_bins)
 
-    def sub_psi(ref_perc, curr_perc):
-        """Calculate the actual PSI value from comparing the values.
-        Update the actual value to a very small number if equal to zero
-        """
-        value = (ref_perc - curr_perc) * np.log(ref_perc / curr_perc)
-        return value
-
-    psi_value = 0
-    for i, _ in enumerate(reference_percents):
-        psi_value += sub_psi(reference_percents[i], current_percents[i])
+    psi_values = (reference_percents - current_percents) * np.log(reference_percents / current_percents)
+    psi_value = np.sum(psi_values)
 
     return psi_value, psi_value >= threshold
 
@@ -65,9 +59,8 @@ def _psi(
 psi_stat_test = StatTest(
     name="psi",
     display_name="PSI",
-    func=_psi,
-    allowed_feature_types=["cat", "num"],
+    allowed_feature_types=[ColumnType.Categorical, ColumnType.Numerical],
     default_threshold=0.1,
 )
 
-register_stattest(psi_stat_test)
+register_stattest(psi_stat_test, _psi)

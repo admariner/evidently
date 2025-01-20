@@ -18,16 +18,16 @@ from evidently.report import Report
                 {
                     "category_feature": ["1", "2", "3"],
                     "numerical_feature": [3, 2, 1],
-                    "target": [None, np.NAN, 1],
-                    "prediction": [1, np.NAN, 1],
+                    "target": [None, np.nan, 1],
+                    "prediction": [1, np.nan, 1],
                 }
             ),
             pd.DataFrame(
                 {
                     "category_feature": ["1", "2", "3"],
                     "numerical_feature": [3, 2, 1],
-                    "target": [None, np.NAN, 1],
-                    "prediction": [1, np.NAN, 1],
+                    "target": [None, np.nan, 1],
+                    "prediction": [1, np.nan, 1],
                 }
             ),
             ColumnMapping(),
@@ -37,8 +37,8 @@ from evidently.report import Report
                 {
                     "category_feature": ["1", "2", "3"],
                     "numerical_feature": [3, 2, 1],
-                    "target": [None, np.NAN, 1],
-                    "prediction": [1, np.NAN, 1],
+                    "target": [None, np.nan, 1],
+                    "prediction": [1, np.nan, 1],
                 }
             ),
             pd.DataFrame(
@@ -73,7 +73,7 @@ from evidently.report import Report
             ),
             ColumnMapping(prediction=["label_a", "label_b"]),
         ),
-        # multy classification
+        # multi classification
         (
             pd.DataFrame(
                 {
@@ -113,8 +113,8 @@ def test_data_drift_metrics_value_error() -> None:
         {
             "category_feature": ["1", "2", "3"],
             "numerical_feature": [3, 2, 1],
-            "target": [None, np.NAN, 1],
-            "prediction": [1, np.NAN, 1],
+            "target": [None, np.nan, 1],
+            "prediction": [1, np.nan, 1],
         }
     )
     data_mapping = ColumnMapping()
@@ -152,6 +152,7 @@ def test_data_drift_metrics_with_options() -> None:
     result = json.loads(result_json)
     assert result["metrics"][0]["metric"] == "DataDriftTable"
     assert result["metrics"][0]["result"] == {
+        "current_fi": None,
         "dataset_drift": False,
         "drift_by_columns": {
             "category_feature": {
@@ -160,11 +161,9 @@ def test_data_drift_metrics_with_options() -> None:
                 "drift_detected": False,
                 "drift_score": 1.0,
                 "stattest_name": "Z-test p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": ["a", "b"], "y": [2, 1]}},
+                "reference": {"small_distribution": {"x": ["a", "b"], "y": [2, 1]}},
             },
             "prediction": {
                 "column_name": "prediction",
@@ -172,11 +171,9 @@ def test_data_drift_metrics_with_options() -> None:
                 "drift_detected": False,
                 "drift_score": 1.0,
                 "stattest_name": "Z-test p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": [0, 1], "y": [1, 2]}},
+                "reference": {"small_distribution": {"x": [0, 1], "y": [1, 2]}},
             },
             "target": {
                 "column_name": "target",
@@ -184,15 +181,14 @@ def test_data_drift_metrics_with_options() -> None:
                 "drift_detected": True,
                 "drift_score": 0.0,
                 "stattest_name": "chi-square p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": [1, 2, 3, 4, 5], "y": [1, 1, 1, 0, 0]}},
+                "reference": {"small_distribution": {"x": [1, 2, 3, 4, 5], "y": [1, 0, 0, 1, 1]}},
             },
         },
         "number_of_columns": 3,
         "number_of_drifted_columns": 1,
+        "reference_fi": None,
         "share_of_drifted_columns": 0.3333333333333333,
     }
 
@@ -200,9 +196,9 @@ def test_data_drift_metrics_with_options() -> None:
 def test_data_drift_metrics_json_output() -> None:
     current_dataset = pd.DataFrame(
         {
-            "category_feature": ["a", "b", "a", np.NAN],
-            "target": [np.NAN, np.NAN, 3, 4],
-            "prediction": [1, 0, np.NAN, 5],
+            "category_feature": ["a", "b", "a", np.nan],
+            "target": [np.nan, np.nan, 3, 4],
+            "prediction": [1, 0, np.nan, 5],
         }
     )
     reference_dataset = pd.DataFrame(
@@ -218,6 +214,7 @@ def test_data_drift_metrics_json_output() -> None:
     result = json.loads(result_json)
     assert result["metrics"][0]["metric"] == "DataDriftTable"
     assert result["metrics"][0]["result"] == {
+        "current_fi": None,
         "dataset_drift": True,
         "drift_by_columns": {
             "category_feature": {
@@ -226,11 +223,9 @@ def test_data_drift_metrics_json_output() -> None:
                 "drift_detected": True,
                 "drift_score": approx(0.66, abs=0.01),
                 "stattest_name": "Z-test p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": ["a", "b"], "y": [2, 1]}},
+                "reference": {"small_distribution": {"x": ["a", "b"], "y": [2, 2]}},
             },
             "prediction": {
                 "column_name": "prediction",
@@ -238,11 +233,9 @@ def test_data_drift_metrics_json_output() -> None:
                 "drift_detected": True,
                 "drift_score": 0.0,
                 "stattest_name": "chi-square p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": [0.0, 1.0, 4.0, 5.0], "y": [1, 1, 0, 1]}},
+                "reference": {"small_distribution": {"x": [0, 1, 4, 5], "y": [0, 1, 2, 1]}},
             },
             "target": {
                 "column_name": "target",
@@ -250,14 +243,13 @@ def test_data_drift_metrics_json_output() -> None:
                 "drift_detected": True,
                 "drift_score": 0.0,
                 "stattest_name": "chi-square p_value",
-                "threshold": 0.7,
-                "typical_examples_cur": None,
-                "typical_examples_ref": None,
-                "typical_words_cur": None,
-                "typical_words_ref": None,
+                "stattest_threshold": 0.7,
+                "current": {"small_distribution": {"x": [1.0, 3.0, 4.0, 5.0], "y": [0, 1, 1, 0]}},
+                "reference": {"small_distribution": {"x": [1, 3, 4, 5], "y": [1, 0, 1, 2]}},
             },
         },
         "number_of_columns": 3,
         "number_of_drifted_columns": 3,
+        "reference_fi": None,
         "share_of_drifted_columns": 1,
     }

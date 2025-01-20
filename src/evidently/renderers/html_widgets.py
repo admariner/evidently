@@ -1,27 +1,31 @@
 import dataclasses
 from enum import Enum
+from typing import Dict
 from typing import Iterable
 from typing import List
 from typing import Optional
 from typing import Tuple
 from typing import Union
-from uuid import uuid4
 
 import numpy as np
 import pandas as pd
 from plotly import graph_objs as go
 from plotly.subplots import make_subplots
+from uuid6 import uuid7
 
+from evidently.metric_results import Distribution
+from evidently.metric_results import HistogramData
+from evidently.metric_results import LiftCurve
+from evidently.metric_results import PRCurve
+from evidently.metric_results import ROCCurve
 from evidently.model.widget import BaseWidgetInfo
 from evidently.model.widget import PlotlyGraphInfo
 from evidently.model.widget import TabInfo
 from evidently.model.widget import WidgetType
 from evidently.options import ColorOptions
-from evidently.utils.types import Numeric
-from evidently.utils.visualizations import Distribution
 
 
-class WidgetSize(Enum):
+class WidgetSize(int, Enum):
     HALF = 1
     FULL = 2
 
@@ -136,7 +140,7 @@ def plotly_graph_tabs(*, title: str, figures: List[GraphData], size: WidgetSize 
         params={
             "graphs": [
                 {
-                    "id": str(uuid4()),
+                    "id": str(uuid7()),
                     "title": graph.title,
                     "graph": {
                         "data": graph.data,
@@ -199,12 +203,7 @@ class CounterData:
         return CounterData(label, f"{value}")
 
 
-def counter(
-    *,
-    counters: List[CounterData],
-    title: str = "",
-    size: WidgetSize = WidgetSize.FULL,
-) -> BaseWidgetInfo:
+def counter(*, counters: List[CounterData], title: str = "", size: WidgetSize = WidgetSize.FULL) -> BaseWidgetInfo:
     """
     generate widget with given counters
 
@@ -240,6 +239,17 @@ def header_text(*, label: str, title: str = "", size: WidgetSize = WidgetSize.FU
         size=size.value,
         params={"counters": [{"value": "", "label": label}]},
     )
+
+
+def text_widget(*, text: str, title: str = "", size: WidgetSize = WidgetSize.FULL):
+    """
+    generate widget with markdown text
+    Args:
+        text: markdown formatted text
+        title: widget title
+        size: widget size
+    """
+    return BaseWidgetInfo(title=title, type="text", size=size.value, params={"text": text})
 
 
 def table_data(
@@ -329,7 +339,7 @@ def widget_tabs(*, title: str = "", size: WidgetSize = WidgetSize.FULL, tabs: Li
         title=title,
         type=WidgetType.TABS.value,
         size=size.value,
-        tabs=[TabInfo(str(uuid4()), tab.title, tab.widget) for tab in tabs],
+        tabs=[TabInfo(str(uuid7()), tab.title, tab.widget) for tab in tabs],
     )
 
 
@@ -450,13 +460,6 @@ def rich_table_data(
     )
 
 
-@dataclasses.dataclass
-class HistogramData:
-    name: str
-    x: list
-    y: List[Union[int, float]]
-
-
 def get_histogram_figure(
     *,
     primary_hist: HistogramData,
@@ -468,7 +471,7 @@ def get_histogram_figure(
     curr_bar = go.Bar(
         name=primary_hist.name,
         x=primary_hist.x,
-        y=primary_hist.y,
+        y=primary_hist.count,
         marker_color=color_options.get_current_data_color(),
         orientation=orientation,
     )
@@ -478,95 +481,11 @@ def get_histogram_figure(
         ref_bar = go.Bar(
             name=secondary_hist.name,
             x=secondary_hist.x,
-            y=secondary_hist.y,
+            y=secondary_hist.count,
             marker_color=color_options.get_reference_data_color(),
             orientation=orientation,
         )
         figure.add_trace(ref_bar)
-
-    return figure
-
-
-def get_histogram_figure_with_range(
-    *,
-    primary_hist: HistogramData,
-    secondary_hist: Optional[HistogramData] = None,
-    left: Numeric,
-    right: Numeric,
-    orientation: str = "v",
-    color_options: ColorOptions,
-) -> go.Figure:
-    figure = get_histogram_figure(
-        primary_hist=primary_hist,
-        secondary_hist=secondary_hist,
-        color_options=color_options,
-        orientation=orientation,
-    )
-    max_y = np.max([np.max(x["y"]) for x in figure.data])
-    min_y = np.min([np.min(x["y"]) for x in figure.data])
-
-    figure.add_trace(
-        go.Scatter(
-            x=[left, left],
-            y=[min_y, max_y],
-            mode="lines",
-            line={"color": color_options.vertical_lines, "width": 2, "dash": "dash"},
-            name="range left value",
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=[right, right],
-            y=[min_y, max_y],
-            mode="lines",
-            line={"color": color_options.vertical_lines, "width": 2, "dash": "solid"},
-            name="range right value",
-        )
-    )
-    figure.add_vrect(x0=left, x1=right, fillcolor=color_options.fill_color, opacity=0.25, line_width=0)
-    return figure
-
-
-def get_histogram_figure_with_quantile(
-    *,
-    current: HistogramData,
-    reference: Optional[HistogramData] = None,
-    current_quantile: float,
-    reference_quantile: Optional[float] = None,
-    color_options: ColorOptions,
-    orientation: str = "v",
-) -> go.Figure:
-    figure = get_histogram_figure(
-        primary_hist=current,
-        secondary_hist=reference,
-        color_options=color_options,
-        orientation=orientation,
-    )
-    # add quantile lines. Use scatter, not `add_vline`
-    # because `add_vline` doesn't support legend, it is not interactive
-    max_y = np.max([np.max(x["y"]) for x in figure.data])
-    min_y = np.min([np.min(x["y"]) for x in figure.data])
-
-    figure.add_trace(
-        go.Scatter(
-            x=[current_quantile, current_quantile],
-            y=[min_y, max_y],
-            mode="lines",
-            line={"color": color_options.vertical_lines, "width": 2, "dash": "dash"},
-            name="reference quantile",
-        )
-    )
-
-    if reference_quantile is not None:
-        figure.add_trace(
-            go.Scatter(
-                x=[reference_quantile, reference_quantile],
-                y=[min_y, max_y],
-                mode="lines",
-                line={"color": color_options.vertical_lines, "width": 2, "dash": "solid"},
-                name="current quantile",
-            )
-        )
 
     return figure
 
@@ -595,8 +514,8 @@ def histogram(
         xaxis_title: title for x-axis
         yaxis_title: title for y-axis
     Example:
-        >>> ref_hist = HistogramData("Histogram 1", x=["a", "b", "c"], y=[1, 2, 3])
-        >>> curr_hist = HistogramData("Histogram 2", x=["a", "b", "c"], y=[3, 2 ,1])
+        >>> ref_hist = HistogramData(name="Histogram 1", x=pd.Series(["a", "b", "c"]), count=pd.Series([1, 2, 3]))
+        >>> curr_hist = HistogramData(name="Histogram 2", x=pd.Series(["a", "b", "c"]), count=pd.Series([3, 2 ,1]))
         >>> widget_info = histogram(
         >>>     title="Histogram example",
         >>>     primary_hist=ref_hist,
@@ -634,15 +553,15 @@ def get_histogram_for_distribution(
 ):
     current_histogram = HistogramData(
         name="current",
-        x=current_distribution.x,
-        y=current_distribution.y,
+        x=pd.Series(current_distribution.x),
+        count=pd.Series(current_distribution.y),
     )
 
     if reference_distribution is not None:
         reference_histogram: Optional[HistogramData] = HistogramData(
             name="reference",
-            x=reference_distribution.x,
-            y=reference_distribution.y,
+            x=pd.Series(reference_distribution.x),
+            count=pd.Series(reference_distribution.y),
         )
 
     else:
@@ -694,7 +613,7 @@ def get_heatmaps_widget(
 
         # show values if thw heatmap is small
         if len(columns) < 15:
-            heatmap_text = np.round(data, 2).astype(str)
+            heatmap_text: Optional[pd.DataFrame] = np.round(data, 2).astype(str)  # type: ignore[assignment]
             heatmap_text_template: Optional[str] = "%{text}"
 
         else:
@@ -721,7 +640,7 @@ def get_heatmaps_widget(
 
 
 def get_roc_auc_tab_data(
-    curr_roc_curve: dict, ref_roc_curve: Optional[dict], color_options: ColorOptions
+    curr_roc_curve: ROCCurve, ref_roc_curve: Optional[ROCCurve], color_options: ColorOptions
 ) -> List[Tuple[str, BaseWidgetInfo]]:
     additional_plots = []
     cols = 1
@@ -732,8 +651,8 @@ def get_roc_auc_tab_data(
     for label in curr_roc_curve.keys():
         fig = make_subplots(rows=1, cols=cols, subplot_titles=subplot_titles, shared_yaxes=True)
         trace = go.Scatter(
-            x=curr_roc_curve[label]["fpr"],
-            y=curr_roc_curve[label]["tpr"],
+            x=curr_roc_curve[label].fpr,
+            y=curr_roc_curve[label].tpr,
             mode="lines",
             name="ROC",
             legendgroup="ROC",
@@ -746,8 +665,8 @@ def get_roc_auc_tab_data(
         fig.update_xaxes(title_text="False Positive Rate", row=1, col=1)
         if ref_roc_curve is not None:
             trace = go.Scatter(
-                x=ref_roc_curve[label]["fpr"],
-                y=ref_roc_curve[label]["tpr"],
+                x=ref_roc_curve[label].fpr,
+                y=ref_roc_curve[label].tpr,
                 mode="lines",
                 name="ROC",
                 legendgroup="ROC",
@@ -766,7 +685,7 @@ def get_roc_auc_tab_data(
 
 
 def get_pr_rec_plot_data(
-    current_pr_curve: dict, reference_pr_curve: Optional[dict], color_options: ColorOptions
+    current_pr_curve: PRCurve, reference_pr_curve: Optional[PRCurve], color_options: ColorOptions
 ) -> List[Tuple[str, BaseWidgetInfo]]:
     additional_plots = []
     cols = 1
@@ -777,8 +696,8 @@ def get_pr_rec_plot_data(
     for label in current_pr_curve.keys():
         fig = make_subplots(rows=1, cols=cols, subplot_titles=subplot_titles, shared_yaxes=True)
         trace = go.Scatter(
-            x=current_pr_curve[label]["rcl"],
-            y=current_pr_curve[label]["pr"],
+            x=current_pr_curve[label].rcl,
+            y=current_pr_curve[label].pr,
             mode="lines",
             name="PR",
             legendgroup="PR",
@@ -791,8 +710,8 @@ def get_pr_rec_plot_data(
         fig.update_xaxes(title_text="Recall", row=1, col=1)
         if reference_pr_curve is not None:
             trace = go.Scatter(
-                x=reference_pr_curve[label]["rcl"],
-                y=reference_pr_curve[label]["pr"],
+                x=reference_pr_curve[label].rcl,
+                y=reference_pr_curve[label].pr,
                 mode="lines",
                 name="PR",
                 legendgroup="PR",
@@ -810,6 +729,135 @@ def get_pr_rec_plot_data(
     return additional_plots
 
 
+def get_lift_plot_data(
+    current_lift_curve: LiftCurve,
+    reference_lift_curve: Optional[LiftCurve],
+    color_options: ColorOptions,
+) -> List[Tuple[str, BaseWidgetInfo]]:
+    """
+    Forms plot data for lift metric visualization
+
+    Parameters
+    ----------
+    current_lift_curve: dict
+        Calculated lift table data for current sample
+    reference_lift_curve: Optional[dict]
+        Calculated lift table data for reference sample
+    color_options: ColorOptions
+        Standard Evidently class-collection of colors for data visualization
+
+    Return values
+    -------------
+    additional_plots: List[Tuple[str, BaseWidgetInfo]]
+        Plot objects within List
+    """
+    additional_plots = []
+    cols = 1
+    subplot_titles = [""]
+    if reference_lift_curve is not None:
+        cols = 2
+        subplot_titles = ["current", "reference"]
+    for label in current_lift_curve.keys():
+        fig = make_subplots(rows=1, cols=cols, subplot_titles=subplot_titles, shared_yaxes=True)
+        trace = go.Scatter(
+            x=current_lift_curve[label].top,
+            y=current_lift_curve[label].lift,
+            mode="lines+markers",
+            name="Lift",
+            hoverinfo="text",
+            text=[
+                f"top: {str(int(current_lift_curve[label].top[i]))}, " f"lift={str(current_lift_curve[label].lift[i])}"
+                for i in range(100)
+            ],
+            legendgroup="Lift",
+            marker=dict(
+                size=6,
+                color=color_options.get_current_data_color(),
+            ),
+        )
+        fig.add_trace(trace, 1, 1)
+        fig.update_xaxes(title_text="Top", row=1, col=1)
+        if reference_lift_curve is not None:
+            trace = go.Scatter(
+                x=reference_lift_curve[label].top,
+                y=reference_lift_curve[label].lift,
+                mode="lines+markers",
+                name="Lift",
+                hoverinfo="text",
+                text=[
+                    f"top: {str(int(reference_lift_curve[label].top[i]))}, "
+                    f"lift={str(reference_lift_curve[label].lift[i])}"
+                    for i in range(100)
+                ],
+                legendgroup="Lift",
+                showlegend=False,
+                marker=dict(
+                    size=6,
+                    color=color_options.get_current_data_color(),
+                ),
+            )
+            fig.add_trace(trace, 1, 2)
+            fig.update_xaxes(title_text="Top", row=1, col=2)
+        fig.update_layout(yaxis_title="Lift", showlegend=True)
+
+        additional_plots.append((str(label), plotly_figure(title="", figure=fig)))
+    return additional_plots
+
+
+def class_separation_traces_raw(df, label, target_name, color_options):
+    traces = []
+    traces.append(
+        go.Scatter(
+            x=np.random.random(df[df[target_name] == label].shape[0]),
+            y=df[df[target_name] == label][label],
+            mode="markers",
+            name=str(label),
+            legendgroup=str(label),
+            marker=dict(size=6, color=color_options.primary_color),
+        )
+    )
+    traces.append(
+        go.Scatter(
+            x=np.random.random(df[df[target_name] != label].shape[0]),
+            y=df[df[target_name] != label][label],
+            mode="markers",
+            name="other",
+            legendgroup="other",
+            marker=dict(size=6, color=color_options.secondary_color),
+        )
+    )
+    return traces
+
+
+def class_separation_traces_agg(df, label, color_options):
+    traces = []
+    df_name = df[df["values"] == label]
+    traces.append(
+        go.Box(
+            lowerfence=df_name["mins"],
+            q1=df_name["lowers"],
+            q3=df_name["uppers"],
+            median=df_name["means"],
+            upperfence=df_name["maxs"],
+            x=df_name["values"].astype(str),
+            marker_color=color_options.get_current_data_color(),
+        )
+    )
+    df_name = df[df["values"] == "others"]
+    traces.append(
+        go.Box(
+            lowerfence=df_name["mins"],
+            q1=df_name["lowers"],
+            q3=df_name["uppers"],
+            median=df_name["means"],
+            upperfence=df_name["maxs"],
+            x=df_name["values"],
+            marker_color=color_options.get_reference_data_color(),
+        )
+    )
+    return traces
+
+
 def get_class_separation_plot_data(
     current_plot: pd.DataFrame, reference_plot: Optional[pd.DataFrame], target_name: str, color_options: ColorOptions
 ) -> List[Tuple[str, BaseWidgetInfo]]:
@@ -821,51 +869,84 @@ def get_class_separation_plot_data(
         subplot_titles = ["current", "reference"]
     for label in current_plot.columns.drop(target_name):
         fig = make_subplots(rows=1, cols=cols, subplot_titles=subplot_titles, shared_yaxes=True)
-        trace = go.Scatter(
-            x=np.random.random(current_plot[current_plot[target_name] == label].shape[0]),
-            y=current_plot[current_plot[target_name] == label][label],
-            mode="markers",
-            name=str(label),
-            legendgroup=str(label),
-            marker=dict(size=6, color=color_options.primary_color),
-        )
-        fig.add_trace(trace, 1, 1)
-
-        trace = go.Scatter(
-            x=np.random.random(current_plot[current_plot[target_name] != label].shape[0]),
-            y=current_plot[current_plot[target_name] != label][label],
-            mode="markers",
-            name="other",
-            legendgroup="other",
-            marker=dict(size=6, color=color_options.secondary_color),
-        )
-        fig.add_trace(trace, 1, 1)
+        traces = class_separation_traces_raw(current_plot, label, target_name, color_options)
+        for trace in traces:
+            fig.add_trace(trace, 1, 1)
         fig.update_xaxes(dict(range=(-2, 3), showticklabels=False), row=1, col=1)
 
         if reference_plot is not None:
-            trace = go.Scatter(
-                x=np.random.random(reference_plot[reference_plot[target_name] == label].shape[0]),
-                y=reference_plot[reference_plot[target_name] == label][label],
-                mode="markers",
-                name=str(label),
-                legendgroup=str(label),
-                showlegend=False,
-                marker=dict(size=6, color=color_options.primary_color),
-            )
-            fig.add_trace(trace, 1, 2)
-
-            trace = go.Scatter(
-                x=np.random.random(reference_plot[reference_plot[target_name] != label].shape[0]),
-                y=reference_plot[reference_plot[target_name] != label][label],
-                mode="markers",
-                name="other",
-                legendgroup="other",
-                showlegend=False,
-                marker=dict(size=6, color=color_options.secondary_color),
-            )
-            fig.add_trace(trace, 1, 2)
+            traces = class_separation_traces_raw(reference_plot, label, target_name, color_options)
+            for trace in traces:
+                fig.add_trace(trace, 1, 2)
             fig.update_xaxes(dict(range=(-2, 3), showticklabels=False), row=1, col=2)
+
         fig.update_layout(yaxis_title="Probability", showlegend=True)
 
         additional_plots.append((str(label), plotly_figure(title="", figure=fig)))
     return additional_plots
+
+
+def get_class_separation_plot_data_agg(
+    current_plot: Dict[Union[int, str], pd.DataFrame],
+    reference_plot: Optional[Dict[Union[int, str], pd.DataFrame]],
+    target_name: str,
+    color_options: ColorOptions,
+) -> List[Tuple[str, BaseWidgetInfo]]:
+    additional_plots = []
+    cols = 1
+    subplot_titles = [""]
+    if reference_plot is not None:
+        cols = 2
+        subplot_titles = ["current", "reference"]
+    for label in current_plot.keys():
+        fig = make_subplots(rows=1, cols=cols, subplot_titles=subplot_titles, shared_yaxes=True)
+        traces = class_separation_traces_agg(current_plot[label], label, color_options)
+        for trace in traces:
+            fig.add_trace(trace, 1, 1)
+
+        if reference_plot is not None:
+            traces = class_separation_traces_agg(reference_plot[label], label, color_options)
+            for trace in traces:
+                fig.add_trace(trace, 1, 2)
+
+        fig.update_layout(yaxis_title="Probability", showlegend=False)
+
+        additional_plots.append((str(label), plotly_figure(title="", figure=fig)))
+    return additional_plots
+
+
+def group_widget(
+    *,
+    title: str,
+    widgets: List[BaseWidgetInfo],
+) -> BaseWidgetInfo:
+    return BaseWidgetInfo(
+        title=title,
+        type=WidgetType.GROUP.value,
+        widgets=widgets,
+        size=2,
+    )
+
+
+def rich_data(
+    *,
+    title: str,
+    description: str,
+    header: List[str],
+    metrics: List[dict],
+    graph: Optional[PlotlyGraphInfo],
+):
+    return BaseWidgetInfo(
+        type=WidgetType.RICH_DATA.value,
+        title="",
+        size=2,
+        params={
+            "header": title,
+            "description": description,
+            "metricsValuesHeaders": header,
+            "metrics": metrics,
+            "graph": graph,
+            "details": {"parts": [], "insights": []},
+        },
+        additionalGraphs=[],
+    )

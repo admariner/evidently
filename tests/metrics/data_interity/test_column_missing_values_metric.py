@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from evidently import ColumnMapping
 from evidently.metrics.data_integrity.column_missing_values_metric import ColumnMissingValues
 from evidently.metrics.data_integrity.column_missing_values_metric import ColumnMissingValuesMetric
 from evidently.metrics.data_integrity.column_missing_values_metric import ColumnMissingValuesMetricResult
+from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.report import Report
 
 
@@ -130,9 +130,7 @@ def test_column_missing_values_metric_success(
     ),
 )
 def test_column_missing_values_metric_value_error(
-    current_data: pd.DataFrame,
-    reference_data: pd.DataFrame,
-    metric: ColumnMissingValuesMetric,
+    current_data: pd.DataFrame, reference_data: pd.DataFrame, metric: ColumnMissingValuesMetric
 ) -> None:
     with pytest.raises(ValueError):
         report = Report(metrics=[metric])
@@ -196,7 +194,7 @@ def test_column_missing_values_metric_value_error(
         (
             pd.DataFrame(
                 {
-                    "col": [1, np.NAN, 3, None, 5, "a", "b", "c", 1, 1234567890, "a", "a", "d", "e", "f"],
+                    "col": [1, np.nan, 3, None, 5, "a", "b", "c", 1, 1234567890, "a", "a", "d", "e", "f"],
                 }
             ),
             None,

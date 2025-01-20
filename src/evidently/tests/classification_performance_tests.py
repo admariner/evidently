@@ -1,14 +1,20 @@
 import abc
 from abc import ABC
 from typing import Any
+from typing import ClassVar
 from typing import List
 from typing import Optional
 from typing import Union
 
-from evidently.calculations.classification_performance import DatasetClassificationQuality
+from evidently.metric_results import DatasetClassificationQuality
+from evidently.metric_results import Label
+from evidently.metric_results import ROCCurve
 from evidently.metrics.classification_performance.classification_dummy_metric import ClassificationDummyMetric
 from evidently.metrics.classification_performance.classification_quality_metric import ClassificationConfusionMatrix
 from evidently.metrics.classification_performance.classification_quality_metric import ClassificationQualityMetric
+from evidently.metrics.classification_performance.classification_quality_metric import ClassificationQualityMetricResult
+from evidently.metrics.classification_performance.confusion_matrix_metric import ClassificationConfusionMatrixParameters
+from evidently.metrics.classification_performance.objects import ClassMetric
 from evidently.metrics.classification_performance.quality_by_class_metric import ClassificationQualityByClass
 from evidently.metrics.classification_performance.roc_curve_metric import ClassificationRocCurve
 from evidently.renderers.base_renderer import TestHtmlInfo
@@ -19,6 +25,7 @@ from evidently.renderers.html_widgets import get_roc_auc_tab_data
 from evidently.renderers.html_widgets import plotly_figure
 from evidently.renderers.html_widgets import widget_tabs
 from evidently.tests.base_test import BaseCheckValueTest
+from evidently.tests.base_test import CheckValueParameters
 from evidently.tests.base_test import GroupData
 from evidently.tests.base_test import GroupingTypes
 from evidently.tests.base_test import TestValueCondition
@@ -33,10 +40,12 @@ GroupingTypes.TestGroup.add_value(CLASSIFICATION_GROUP)
 
 
 class SimpleClassificationTest(BaseCheckValueTest):
-    group = CLASSIFICATION_GROUP.id
-    name: str
-    metric: ClassificationQualityMetric
-    dummy_metric: ClassificationDummyMetric
+    condition_arg: ClassVar[str] = "gt"
+
+    group: ClassVar = CLASSIFICATION_GROUP.id
+    name: ClassVar[str]
+    _metric: ClassificationQualityMetric
+    _dummy_metric: ClassificationDummyMetric
 
     def __init__(
         self,
@@ -48,10 +57,29 @@ class SimpleClassificationTest(BaseCheckValueTest):
         lte: Optional[Numeric] = None,
         not_eq: Optional[Numeric] = None,
         not_in: Optional[List[Union[Numeric, str, bool]]] = None,
+        is_critical: bool = True,
     ):
-        super().__init__(eq=eq, gt=gt, gte=gte, is_in=is_in, lt=lt, lte=lte, not_eq=not_eq, not_in=not_in)
-        self.metric = ClassificationQualityMetric()
-        self.dummy_metric = ClassificationDummyMetric()
+        super().__init__(
+            eq=eq,
+            gt=gt,
+            gte=gte,
+            is_in=is_in,
+            lt=lt,
+            lte=lte,
+            not_eq=not_eq,
+            not_in=not_in,
+            is_critical=is_critical,
+        )
+        self._metric = ClassificationQualityMetric()
+        self._dummy_metric = ClassificationDummyMetric()
+
+    @property
+    def metric(self):
+        return self._metric
+
+    @property
+    def dummy_metric(self):
+        return self._dummy_metric
 
     def calculate_value_for_test(self) -> Optional[Any]:
         return self.get_value(self.metric.get_result().current)
@@ -68,24 +96,20 @@ class SimpleClassificationTest(BaseCheckValueTest):
         if self.get_value(self.dummy_metric.get_result().dummy) is None:
             raise ValueError("Neither required test parameters nor reference data has been provided.")
 
-        return TestValueCondition(gt=self.get_value(self.dummy_metric.get_result().dummy))
+        return TestValueCondition(**{self.condition_arg: self.get_value(self.dummy_metric.get_result().dummy)})
 
     @abc.abstractmethod
     def get_value(self, result: DatasetClassificationQuality):
         raise NotImplementedError()
 
 
-class SimpleClassificationTestTopK(SimpleClassificationTest, ABC):
-    metric: ClassificationQualityMetric
-    dummy_metric: ClassificationDummyMetric
-    conf_matrix: ClassificationConfusionMatrix
-    probas_threshold: Optional[float]
-    k: Optional[Union[float, int]]
+class SimpleClassificationTestTopK(SimpleClassificationTest, ClassificationConfusionMatrixParameters, ABC):
+    _conf_matrix: ClassificationConfusionMatrix
 
     def __init__(
         self,
         probas_threshold: Optional[float] = None,
-        k: Optional[Union[float, int]] = None,
+        k: Optional[int] = None,
         eq: Optional[Numeric] = None,
         gt: Optional[Numeric] = None,
         gte: Optional[Numeric] = None,
@@ -94,7 +118,12 @@ class SimpleClassificationTestTopK(SimpleClassificationTest, ABC):
         lte: Optional[Numeric] = None,
         not_eq: Optional[Numeric] = None,
         not_in: Optional[List[Union[Numeric, str, bool]]] = None,
+        is_critical: bool = True,
     ):
+        if k is not None and probas_threshold is not None:
+            raise ValueError("Only one of 'probas_threshold' or 'k' should be given")
+        self.k = k
+        self.probas_threshold = probas_threshold
         super().__init__(
             eq=eq,
             gt=gt,
@@ -104,37 +133,24 @@ class SimpleClassificationTestTopK(SimpleClassificationTest, ABC):
             lte=lte,
             not_eq=not_eq,
             not_in=not_in,
+            is_critical=is_critical,
         )
-        if k is not None and probas_threshold is not None:
-            raise ValueError("Only one of 'probas_threshold' or 'k' should be given")
-        self.k = k
-        self.probas_threshold = probas_threshold
-        self.dummy_metric = ClassificationDummyMetric(probas_threshold=self.probas_threshold, k=self.k)
-        self.metric = ClassificationQualityMetric(probas_threshold=self.probas_threshold, k=self.k)
-        self.conf_matrix = ClassificationConfusionMatrix(probas_threshold=self.probas_threshold, k=self.k)
+        self._dummy_metric = ClassificationDummyMetric(probas_threshold=self.probas_threshold, k=self.k)
+        self._metric = ClassificationQualityMetric(probas_threshold=self.probas_threshold, k=self.k)
+        self._conf_matrix = self.confusion_matric_metric()
 
     def calculate_value_for_test(self) -> Optional[Any]:
         return self.get_value(self.metric.get_result().current)
 
-    def get_condition(self) -> TestValueCondition:
-        if self.condition.has_condition():
-            return self.condition
-
-        result = self.metric.get_result()
-        ref_metrics = result.reference
-
-        if ref_metrics is not None:
-            return TestValueCondition(eq=approx(self.get_value(ref_metrics), relative=0.2))
-
-        dummy_result = self.dummy_metric.get_result().dummy
-
-        if self.get_value(dummy_result) is None:
-            raise ValueError("Neither required test parameters nor reference data has been provided.")
-
-        return TestValueCondition(gt=self.get_value(dummy_result))
+    @property
+    def conf_matrix(self):
+        return self._conf_matrix
 
 
 class TestAccuracyScore(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestAccuracyScore"
+
     name = "Accuracy Score"
 
     def get_value(self, result: DatasetClassificationQuality):
@@ -146,12 +162,6 @@ class TestAccuracyScore(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestAccuracyScore)
 class TestAccuracyScoreRenderer(TestRenderer):
-    def render_json(self, obj: TestAccuracyScore) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["accuracy"] = obj.value
-        return base
-
     def render_html(self, obj: TestAccuracyScore) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -162,6 +172,9 @@ class TestAccuracyScoreRenderer(TestRenderer):
 
 
 class TestPrecisionScore(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestPrecisionScore"
+
     name = "Precision Score"
 
     def get_value(self, result: DatasetClassificationQuality):
@@ -173,12 +186,6 @@ class TestPrecisionScore(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestPrecisionScore)
 class TestPrecisionScoreRenderer(TestRenderer):
-    def render_json(self, obj: TestPrecisionScore) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["precision"] = obj.value
-        return base
-
     def render_html(self, obj: TestPrecisionScore) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -189,7 +196,10 @@ class TestPrecisionScoreRenderer(TestRenderer):
 
 
 class TestF1Score(SimpleClassificationTestTopK):
-    name = "F1 Score"
+    class Config:
+        type_alias = "evidently:test:TestF1Score"
+
+    name: ClassVar = "F1 Score"
 
     def get_value(self, result: DatasetClassificationQuality):
         return result.f1
@@ -200,12 +210,6 @@ class TestF1Score(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestF1Score)
 class TestF1ScoreRenderer(TestRenderer):
-    def render_json(self, obj: TestF1Score) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["f1"] = obj.value
-        return base
-
     def render_html(self, obj: TestF1Score) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -216,6 +220,9 @@ class TestF1ScoreRenderer(TestRenderer):
 
 
 class TestRecallScore(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestRecallScore"
+
     name = "Recall Score"
 
     def get_value(self, result: DatasetClassificationQuality):
@@ -227,12 +234,6 @@ class TestRecallScore(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestRecallScore)
 class TestRecallScoreRenderer(TestRenderer):
-    def render_json(self, obj: TestRecallScore) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["recall"] = obj.value
-        return base
-
     def render_html(self, obj: TestRecallScore) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -243,8 +244,11 @@ class TestRecallScoreRenderer(TestRenderer):
 
 
 class TestRocAuc(SimpleClassificationTest):
-    name = "ROC AUC Score"
-    roc_curve: ClassificationRocCurve
+    class Config:
+        type_alias = "evidently:test:TestRocAuc"
+
+    name: ClassVar = "ROC AUC Score"
+    _roc_curve: ClassificationRocCurve
 
     def __init__(
         self,
@@ -256,9 +260,20 @@ class TestRocAuc(SimpleClassificationTest):
         lte: Optional[Numeric] = None,
         not_eq: Optional[Numeric] = None,
         not_in: Optional[List[Union[Numeric, str, bool]]] = None,
+        is_critical: bool = True,
     ):
-        super().__init__(eq=eq, gt=gt, gte=gte, is_in=is_in, lt=lt, lte=lte, not_eq=not_eq, not_in=not_in)
-        self.roc_curve = ClassificationRocCurve()
+        self._roc_curve = ClassificationRocCurve()
+        super().__init__(
+            eq=eq,
+            gt=gt,
+            gte=gte,
+            is_in=is_in,
+            lt=lt,
+            lte=lte,
+            not_eq=not_eq,
+            not_in=not_in,
+            is_critical=is_critical,
+        )
 
     def get_value(self, result: DatasetClassificationQuality):
         return result.roc_auc
@@ -273,16 +288,10 @@ class TestRocAuc(SimpleClassificationTest):
 
 @default_renderer(wrap_type=TestRocAuc)
 class TestRocAucRenderer(TestRenderer):
-    def render_json(self, obj: TestRocAuc) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["roc_auc"] = obj.value
-        return base
-
     def render_html(self, obj: TestRocAuc) -> TestHtmlInfo:
         info = super().render_html(obj)
-        curr_roc_curve = obj.roc_curve.get_result().current_roc_curve
-        ref_roc_curve = obj.roc_curve.get_result().reference_roc_curve
+        curr_roc_curve: Optional[ROCCurve] = obj._roc_curve.get_result().current_roc_curve
+        ref_roc_curve: Optional[ROCCurve] = obj._roc_curve.get_result().reference_roc_curve
 
         if curr_roc_curve is None:
             return info
@@ -297,21 +306,11 @@ class TestRocAucRenderer(TestRenderer):
 
 
 class TestLogLoss(SimpleClassificationTest):
+    class Config:
+        type_alias = "evidently:test:TestLogLoss"
+
+    condition_arg = "lt"
     name = "Logarithmic Loss"
-
-    def get_condition(self) -> TestValueCondition:
-        if self.condition.has_condition():
-            return self.condition
-
-        ref_metrics = self.metric.get_result().reference
-
-        if ref_metrics is not None:
-            return TestValueCondition(eq=approx(self.get_value(ref_metrics), relative=0.2))
-
-        if self.get_value(self.dummy_metric.get_result().dummy) is None:
-            raise ValueError("Neither required test parameters nor reference data has been provided.")
-
-        return TestValueCondition(lt=self.get_value(self.dummy_metric.get_result().dummy))
 
     def get_value(self, result: DatasetClassificationQuality):
         return result.log_loss
@@ -326,27 +325,28 @@ class TestLogLoss(SimpleClassificationTest):
 
 @default_renderer(wrap_type=TestLogLoss)
 class TestLogLossRenderer(TestRenderer):
-    def render_json(self, obj: TestLogLoss) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["log_loss"] = obj.value
-        return base
-
     def render_html(self, obj: TestLogLoss) -> TestHtmlInfo:
         info = super().render_html(obj)
-        result = obj.metric.get_result()
+        result: ClassificationQualityMetricResult = obj.metric.get_result()
 
         curr_metrics = result.current.plot_data
         ref_metrics = None if result.reference is None else result.reference.plot_data
 
         if curr_metrics is not None:
-            fig = plot_boxes(curr_for_plots=curr_metrics, ref_for_plots=ref_metrics, color_options=self.color_options)
+            fig = plot_boxes(
+                curr_for_plots=curr_metrics,
+                ref_for_plots=ref_metrics,
+                color_options=self.color_options,
+            )
             info.with_details("Logarithmic Loss", plotly_figure(title="", figure=fig))
 
         return info
 
 
 class TestTPR(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestTPR"
+
     name = "True Positive Rate"
 
     def get_value(self, result: DatasetClassificationQuality):
@@ -361,12 +361,6 @@ class TestTPR(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestTPR)
 class TestTPRRenderer(TestRenderer):
-    def render_json(self, obj: TestTPR) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["tpr"] = obj.value
-        return base
-
     def render_html(self, obj: TestF1Score) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_metrics = obj.metric.get_result().current
@@ -389,6 +383,9 @@ class TestTPRRenderer(TestRenderer):
 
 
 class TestTNR(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestTNR"
+
     name = "True Negative Rate"
 
     def get_value(self, result: DatasetClassificationQuality):
@@ -403,12 +400,6 @@ class TestTNR(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestTNR)
 class TestTNRRenderer(TestRenderer):
-    def render_json(self, obj: TestTNR) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["tnr"] = obj.value
-        return base
-
     def render_html(self, obj: TestF1Score) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_metrics = obj.metric.get_result().current
@@ -431,23 +422,11 @@ class TestTNRRenderer(TestRenderer):
 
 
 class TestFPR(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestFPR"
+
+    condition_arg: ClassVar = "lt"
     name = "False Positive Rate"
-
-    def get_condition(self) -> TestValueCondition:
-        if self.condition.has_condition():
-            return self.condition
-
-        result = self.metric.get_result()
-        ref_metrics = result.reference
-        dummy_metrics = self.dummy_metric.get_result().dummy
-
-        if ref_metrics is not None:
-            return TestValueCondition(eq=approx(self.get_value(ref_metrics), relative=0.2))
-
-        if self.get_value(dummy_metrics) is None:
-            raise ValueError("Neither required test parameters nor reference data has been provided.")
-
-        return TestValueCondition(lt=self.get_value(dummy_metrics))
 
     def get_value(self, result: DatasetClassificationQuality):
         return result.fpr
@@ -461,12 +440,6 @@ class TestFPR(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestFPR)
 class TestFPRRenderer(TestRenderer):
-    def render_json(self, obj: TestFPR) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["fpr"] = obj.value
-        return base
-
     def render_html(self, obj: TestF1Score) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_metrics = obj.metric.get_result().current
@@ -489,23 +462,11 @@ class TestFPRRenderer(TestRenderer):
 
 
 class TestFNR(SimpleClassificationTestTopK):
+    class Config:
+        type_alias = "evidently:test:TestFNR"
+
+    condition_arg: ClassVar = "lt"
     name = "False Negative Rate"
-
-    def get_condition(self) -> TestValueCondition:
-        if self.condition.has_condition():
-            return self.condition
-
-        result = self.metric.get_result()
-        ref_metrics = result.reference
-        dummy_metrics = self.dummy_metric.get_result().dummy
-
-        if ref_metrics is not None:
-            return TestValueCondition(eq=approx(self.get_value(ref_metrics), relative=0.2))
-
-        if self.get_value(dummy_metrics) is None:
-            raise ValueError("Neither required test parameters nor reference data has been provided.")
-
-        return TestValueCondition(lt=self.get_value(dummy_metrics))
 
     def get_value(self, result: DatasetClassificationQuality):
         return result.fnr
@@ -519,12 +480,6 @@ class TestFNR(SimpleClassificationTestTopK):
 
 @default_renderer(wrap_type=TestFNR)
 class TestFNRRenderer(TestRenderer):
-    def render_json(self, obj: TestFNR) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["fnr"] = obj.value
-        return base
-
     def render_html(self, obj: TestF1Score) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_metrics = obj.metric.get_result().current
@@ -546,18 +501,28 @@ class TestFNRRenderer(TestRenderer):
         return info
 
 
+class ByClassParameters(CheckValueParameters):
+    class Config:
+        type_alias = "evidently:test_parameters:ByClassParameters"
+
+    label: Label
+
+
 class ByClassClassificationTest(BaseCheckValueTest, ABC):
-    group = CLASSIFICATION_GROUP.id
-    metric: ClassificationQualityMetric
-    by_class_metric: ClassificationQualityByClass
-    dummy_metric: ClassificationDummyMetric
-    conf_matrix: ClassificationConfusionMatrix
+    group: ClassVar = CLASSIFICATION_GROUP.id
+    _metric: ClassificationQualityMetric
+    _by_class_metric: ClassificationQualityByClass
+    _dummy_metric: ClassificationDummyMetric
+    _conf_matrix: ClassificationConfusionMatrix
+    label: Label
+    probas_threshold: Optional[float] = None
+    k: Optional[int] = None
 
     def __init__(
         self,
-        label: str,
+        label: Label,
         probas_threshold: Optional[float] = None,
-        k: Optional[Union[float, int]] = None,
+        k: Optional[int] = None,
         eq: Optional[Numeric] = None,
         gt: Optional[Numeric] = None,
         gte: Optional[Numeric] = None,
@@ -566,29 +531,56 @@ class ByClassClassificationTest(BaseCheckValueTest, ABC):
         lte: Optional[Numeric] = None,
         not_eq: Optional[Numeric] = None,
         not_in: Optional[List[Union[Numeric, str, bool]]] = None,
+        is_critical: bool = True,
     ):
-        super().__init__(eq=eq, gt=gt, gte=gte, is_in=is_in, lt=lt, lte=lte, not_eq=not_eq, not_in=not_in)
-
         if k is not None and probas_threshold is not None:
             raise ValueError("Only one of 'probas_threshold' or 'k' should be given")
 
         self.label = label
         self.probas_threshold = probas_threshold
         self.k = k
-        self.metric = ClassificationQualityMetric(probas_threshold=self.probas_threshold, k=self.k)
-        self.dummy_metric = ClassificationDummyMetric(probas_threshold=self.probas_threshold, k=self.k)
-        self.by_class_metric = ClassificationQualityByClass(probas_threshold=self.probas_threshold, k=self.k)
-        self.conf_matrix = ClassificationConfusionMatrix(probas_threshold=self.probas_threshold, k=self.k)
+        super().__init__(
+            eq=eq,
+            gt=gt,
+            gte=gte,
+            is_in=is_in,
+            lt=lt,
+            lte=lte,
+            not_eq=not_eq,
+            not_in=not_in,
+            is_critical=is_critical,
+        )
+
+        self._metric = ClassificationQualityMetric(probas_threshold=self.probas_threshold, k=self.k)
+        self._dummy_metric = ClassificationDummyMetric(probas_threshold=self.probas_threshold, k=self.k)
+        self._by_class_metric = ClassificationQualityByClass(probas_threshold=self.probas_threshold, k=self.k)
+        self._conf_matrix = ClassificationConfusionMatrix(probas_threshold=self.probas_threshold, k=self.k)
+
+    @property
+    def metric(self):
+        return self._metric
+
+    @property
+    def dummy_metric(self):
+        return self._dummy_metric
+
+    @property
+    def by_class_metric(self):
+        return self._by_class_metric
+
+    @property
+    def conf_matrix(self):
+        return self._conf_matrix
 
     def calculate_value_for_test(self) -> Optional[Any]:
-        return self.get_value(self.by_class_metric.get_result().current_metrics[self.label])
+        return self.get_value(self.by_class_metric.get_result().current.metrics[self.label])
 
     def get_condition(self) -> TestValueCondition:
         if self.condition.has_condition():
             return self.condition
 
         result = self.by_class_metric.get_result()
-        ref_metrics = result.reference_metrics
+        ref_metrics = result.reference.metrics if result.reference is not None else None
 
         if ref_metrics is not None:
             return TestValueCondition(eq=approx(self.get_value(ref_metrics[self.label]), relative=0.2))
@@ -601,15 +593,21 @@ class ByClassClassificationTest(BaseCheckValueTest, ABC):
         return TestValueCondition(gt=self.get_value(dummy_result))
 
     @abc.abstractmethod
-    def get_value(self, result: dict):
+    def get_value(self, result: ClassMetric):
         raise NotImplementedError()
+
+    def get_parameters(self) -> ByClassParameters:
+        return ByClassParameters(condition=self.get_condition(), value=self._value, label=self.label)
 
 
 class TestPrecisionByClass(ByClassClassificationTest):
-    name: str = "Precision Score by Class"
+    class Config:
+        type_alias = "evidently:test:TestPrecisionByClass"
 
-    def get_value(self, result: dict):
-        return result["precision"]
+    name: ClassVar[str] = "Precision Score by Class"
+
+    def get_value(self, result: ClassMetric):
+        return result.precision
 
     def get_description(self, value: Numeric) -> str:
         return (
@@ -620,13 +618,6 @@ class TestPrecisionByClass(ByClassClassificationTest):
 
 @default_renderer(wrap_type=TestPrecisionByClass)
 class TestPrecisionByClassRenderer(TestRenderer):
-    def render_json(self, obj: TestPrecisionByClass) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["precision"] = obj.value
-        base["parameters"]["label"] = obj.label
-        return base
-
     def render_html(self, obj: TestPrecisionByClass) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -637,10 +628,13 @@ class TestPrecisionByClassRenderer(TestRenderer):
 
 
 class TestRecallByClass(ByClassClassificationTest):
-    name: str = "Recall Score by Class"
+    class Config:
+        type_alias = "evidently:test:TestRecallByClass"
 
-    def get_value(self, result: dict):
-        return result["recall"]
+    name: ClassVar[str] = "Recall Score by Class"
+
+    def get_value(self, result: ClassMetric):
+        return result.recall
 
     def get_description(self, value: Numeric) -> str:
         return (
@@ -651,13 +645,6 @@ class TestRecallByClass(ByClassClassificationTest):
 
 @default_renderer(wrap_type=TestRecallByClass)
 class TestRecallByClassRenderer(TestRenderer):
-    def render_json(self, obj: TestRecallByClass) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["recall"] = obj.value
-        base["parameters"]["label"] = obj.label
-        return base
-
     def render_html(self, obj: TestRecallByClass) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix
@@ -668,10 +655,13 @@ class TestRecallByClassRenderer(TestRenderer):
 
 
 class TestF1ByClass(ByClassClassificationTest):
-    name: str = "F1 Score by Class"
+    class Config:
+        type_alias = "evidently:test:TestF1ByClass"
 
-    def get_value(self, result: dict):
-        return result["f1-score"]
+    name: ClassVar[str] = "F1 Score by Class"
+
+    def get_value(self, result: ClassMetric):
+        return result.f1
 
     def get_description(self, value: Numeric) -> str:
         return (
@@ -681,13 +671,6 @@ class TestF1ByClass(ByClassClassificationTest):
 
 @default_renderer(wrap_type=TestF1ByClass)
 class TestF1ByClassRenderer(TestRenderer):
-    def render_json(self, obj: TestF1ByClass) -> dict:
-        base = super().render_json(obj)
-        base["parameters"]["condition"] = obj.get_condition().as_dict()
-        base["parameters"]["f1"] = obj.value
-        base["parameters"]["label"] = obj.label
-        return base
-
     def render_html(self, obj: TestF1ByClass) -> TestHtmlInfo:
         info = super().render_html(obj)
         curr_matrix = obj.conf_matrix.get_result().current_matrix

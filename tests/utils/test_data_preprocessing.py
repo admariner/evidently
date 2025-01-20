@@ -3,11 +3,11 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+from evidently.core import ColumnType
 from evidently.pipeline.column_mapping import ColumnMapping
 from evidently.utils.data_preprocessing import NUMBER_UNIQUE_AS_CATEGORICAL
 from evidently.utils.data_preprocessing import ColumnDefinition
 from evidently.utils.data_preprocessing import ColumnPresenceState
-from evidently.utils.data_preprocessing import ColumnType
 from evidently.utils.data_preprocessing import DataDefinition
 from evidently.utils.data_preprocessing import PredictionColumns
 from evidently.utils.data_preprocessing import _get_column_presence
@@ -17,22 +17,23 @@ from evidently.utils.data_preprocessing import create_data_definition
 
 
 def test_get_columns():
+    columns = [
+        ColumnDefinition("id", ColumnType.Categorical),
+        ColumnDefinition("datetime", ColumnType.Datetime),
+        ColumnDefinition("target", ColumnType.Categorical),
+        ColumnDefinition("predicted", ColumnType.Categorical),
+        ColumnDefinition("class_1", ColumnType.Numerical),
+        ColumnDefinition("class_2", ColumnType.Numerical),
+        ColumnDefinition("class_3", ColumnType.Numerical),
+        ColumnDefinition("column_1", ColumnType.Categorical),
+        ColumnDefinition("column_2", ColumnType.Numerical),
+        ColumnDefinition("column_3", ColumnType.Numerical),
+        ColumnDefinition("column_4", ColumnType.Datetime),
+        ColumnDefinition("column_5", ColumnType.Datetime),
+        ColumnDefinition("column_6", ColumnType.Datetime),
+    ]
     definition = DataDefinition(
-        columns=[
-            ColumnDefinition("id", ColumnType.Categorical),
-            ColumnDefinition("datetime", ColumnType.Datetime),
-            ColumnDefinition("target", ColumnType.Categorical),
-            ColumnDefinition("predicted", ColumnType.Categorical),
-            ColumnDefinition("class_1", ColumnType.Numerical),
-            ColumnDefinition("class_2", ColumnType.Numerical),
-            ColumnDefinition("class_3", ColumnType.Numerical),
-            ColumnDefinition("column_1", ColumnType.Categorical),
-            ColumnDefinition("column_2", ColumnType.Numerical),
-            ColumnDefinition("column_3", ColumnType.Numerical),
-            ColumnDefinition("column_4", ColumnType.Datetime),
-            ColumnDefinition("column_5", ColumnType.Datetime),
-            ColumnDefinition("column_6", ColumnType.Datetime),
-        ],
+        columns={c.column_name: c for c in columns},
         id_column=ColumnDefinition("id", ColumnType.Categorical),
         datetime_column=ColumnDefinition("datetime", ColumnType.Datetime),
         target=ColumnDefinition("target", ColumnType.Categorical),
@@ -46,6 +47,11 @@ def test_get_columns():
         ),
         task="classification",
         classification_labels=["class_1", "class_2", "class_3"],
+        embeddings=None,
+        reference_present=True,
+        user_id=None,
+        item_id=None,
+        recommendations_type=None,
     )
 
     all_columns = [
@@ -65,20 +71,26 @@ def test_get_columns():
     ]
     assert all_columns == [cd.column_name for cd in definition.get_columns()]
     cat_columns = ["id", "target", "predicted", "column_1"]
-    assert cat_columns == [cd.column_name for cd in definition.get_columns(filter_def="categorical_columns")]
+    assert cat_columns == [cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Categorical)]
     num_columns = ["class_1", "class_2", "class_3", "column_2", "column_3"]
-    assert num_columns == [cd.column_name for cd in definition.get_columns(filter_def="numerical_columns")]
+    assert num_columns == [cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Numerical)]
     dt_columns = ["datetime", "column_4", "column_5", "column_6"]
-    assert dt_columns == [cd.column_name for cd in definition.get_columns(filter_def="datetime_columns")]
+    assert dt_columns == [cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Datetime)]
 
     features = ["column_1", "column_2", "column_3", "column_4", "column_5", "column_6"]
-    assert features == [cd.column_name for cd in definition.get_columns(filter_def="all_features")]
+    assert features == [cd.column_name for cd in definition.get_columns(features_only=True)]
     cat_features = ["column_1"]
-    assert cat_features == [cd.column_name for cd in definition.get_columns(filter_def="categorical_features")]
+    assert cat_features == [
+        cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Categorical, features_only=True)
+    ]
     num_features = ["column_2", "column_3"]
-    assert num_features == [cd.column_name for cd in definition.get_columns(filter_def="numerical_features")]
+    assert num_features == [
+        cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Numerical, features_only=True)
+    ]
     dt_features = ["column_4", "column_5", "column_6"]
-    assert dt_features == [cd.column_name for cd in definition.get_columns(filter_def="datetime_features")]
+    assert dt_features == [
+        cd.column_name for cd in definition.get_columns(filter_def=ColumnType.Datetime, features_only=True)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -167,6 +179,12 @@ def test_column_presence(reference, current, column_name, expected):
             "c",
             ColumnType.Datetime,
         ),
+        (
+            pd.DataFrame(dict(a=[1.0], b=pd.Series(["a"], dtype="string"), c=[datetime(2000, 1, 1)])),
+            pd.DataFrame(dict(a=[1.0], b=pd.Series(["a"], dtype="string"), c=[datetime(2000, 1, 1)])),
+            "b",
+            ColumnType.Categorical,
+        ),
     ],
 )
 def test_get_column_type(reference, current, column_name, expected):
@@ -174,7 +192,7 @@ def test_get_column_type(reference, current, column_name, expected):
 
 
 @pytest.mark.parametrize(
-    "reference,current,mapping,target,id,datetime,prediction,columns",
+    "reference,current,mapping,target,id,datetime,prediction,columns,embeddings",
     [
         (
             None,
@@ -189,6 +207,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="c", column_type=ColumnType.Datetime),
             ],
+            None,
         ),
         (
             pd.DataFrame(dict(a=[0.1], b=["a"], c=[datetime(2000, 1, 1)])),
@@ -203,6 +222,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="c", column_type=ColumnType.Datetime),
             ],
+            None,
         ),
         (
             None,
@@ -221,6 +241,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="target", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="a", column_type=ColumnType.Numerical),
             ],
+            None,
         ),
         (
             None,
@@ -238,6 +259,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="prediction", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="a", column_type=ColumnType.Categorical),
             ],
+            None,
         ),
         (
             None,
@@ -256,6 +278,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="target", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="prediction", column_type=ColumnType.Numerical),
             ],
+            None,
         ),
         (
             None,
@@ -272,6 +295,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="a", column_type=ColumnType.Categorical),
                 ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
             ],
+            None,
         ),
         (
             None,
@@ -288,6 +312,7 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="a", column_type=ColumnType.Numerical),
                 ColumnDefinition(column_name="b", column_type=ColumnType.Numerical),
             ],
+            None,
         ),
         (
             None,
@@ -316,13 +341,78 @@ def test_get_column_type(reference, current, column_name, expected):
                 ColumnDefinition(column_name="d", column_type=ColumnType.Numerical),
                 ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
             ],
+            None,
+        ),
+        (
+            pd.DataFrame(dict(a=[0.1], b=["a"], c=[datetime(2000, 1, 1)])),
+            pd.DataFrame(dict(a=[0.1], b=["a"], c=[datetime(2000, 1, 1)])),
+            ColumnMapping(embeddings={"a": ["a"]}),
+            None,
+            None,
+            None,
+            None,
+            [
+                ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
+                ColumnDefinition(column_name="c", column_type=ColumnType.Datetime),
+            ],
+            {"a": ["a"]},
+        ),
+        (
+            pd.DataFrame(dict(a=[0.1], b=["a"], c=[datetime(2000, 1, 1)])),
+            pd.DataFrame(dict(a=[0.1], b=["a"], c=[datetime(2000, 1, 1)])),
+            ColumnMapping(numerical_features=["a"], embeddings={"a": ["a"]}),
+            None,
+            None,
+            None,
+            None,
+            [
+                ColumnDefinition(column_name="b", column_type=ColumnType.Categorical),
+                ColumnDefinition(column_name="c", column_type=ColumnType.Datetime),
+            ],
+            {"a": ["a"]},
+        ),
+        (
+            None,
+            pd.DataFrame(
+                dict(
+                    a=list(range(NUMBER_UNIQUE_AS_CATEGORICAL + 1)),
+                    target=[1] * (NUMBER_UNIQUE_AS_CATEGORICAL + 1),
+                ),
+            ),
+            ColumnMapping(embeddings={"a": ["target"]}),
+            None,
+            None,
+            None,
+            None,
+            [
+                ColumnDefinition(column_name="a", column_type=ColumnType.Numerical),
+            ],
+            {"a": ["target"]},
+        ),
+        (
+            None,
+            pd.DataFrame(dict(a=[1], id=["a"], datetime=[datetime(2000, 1, 1)], prediction=[1])),
+            ColumnMapping(id="id", embeddings={"a": ["id"]}),
+            None,
+            None,
+            ColumnDefinition(column_name="datetime", column_type=ColumnType.Datetime),
+            PredictionColumns(
+                predicted_values=ColumnDefinition(column_name="prediction", column_type=ColumnType.Categorical)
+            ),
+            [
+                ColumnDefinition(column_name="datetime", column_type=ColumnType.Datetime),
+                ColumnDefinition(column_name="prediction", column_type=ColumnType.Categorical),
+                ColumnDefinition(column_name="a", column_type=ColumnType.Categorical),
+            ],
+            {"a": ["id"]},
         ),
     ],
 )
-def test_create_data_definition(reference, current, mapping, target, id, datetime, prediction, columns):
+def test_create_data_definition(reference, current, mapping, target, id, datetime, prediction, columns, embeddings):
     definition = create_data_definition(reference, current, mapping)
     assert definition.get_target_column() == target
     assert definition.get_id_column() == id
     assert definition.get_datetime_column() == datetime
     assert definition.get_prediction_columns() == prediction
     assert definition.get_columns() == columns
+    assert definition.embeddings == embeddings

@@ -1,5 +1,4 @@
-import dataclasses
-from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -15,19 +14,20 @@ from pandas.core.dtypes.common import is_object_dtype
 from pandas.core.dtypes.common import is_string_dtype
 from sklearn import metrics
 
-from evidently import ColumnMapping
-from evidently.utils.data_operations import DatasetColumns
+from evidently.metric_results import Boxes
+from evidently.metric_results import ConfusionMatrix
+from evidently.metric_results import DatasetClassificationQuality
+from evidently.metric_results import DatasetColumns
+from evidently.metric_results import PredictionData
+from evidently.metric_results import RatesPlotData
+from evidently.pipeline.column_mapping import ColumnMapping
 
-
-@dataclass
-class ConfusionMatrix:
-    labels: Sequence[Union[str, int]]
-    values: list
+if TYPE_CHECKING:
+    pass
 
 
 def calculate_confusion_by_classes(
-    confusion_matrix: np.ndarray,
-    class_names: Sequence[Union[str, int]],
+    confusion_matrix: np.ndarray, class_names: Sequence[Union[str, int]]
 ) -> Dict[Union[str, int], Dict[str, int]]:
     """Calculate metrics:
     - TP (true positive)
@@ -71,29 +71,23 @@ def calculate_confusion_by_classes(
     return confusion_by_classes
 
 
-def k_probability_threshold(prediction_probas: pd.DataFrame, k: Union[int, float]) -> float:
+def k_probability_threshold(
+    prediction_probas: pd.DataFrame, k: Optional[int] = None, prob_threshold: Optional[float] = None
+) -> float:
     probas = prediction_probas.iloc[:, 0].sort_values(ascending=False)
-    if isinstance(k, float):
-        if k < 0.0 or k > 1.0:
-            raise ValueError(f"K should be in range [0.0, 1.0] but was {k}")
-        return probas.iloc[max(int(np.ceil(k * prediction_probas.shape[0])) - 1, 0)]
-    if isinstance(k, int):
-        return probas.iloc[min(k, prediction_probas.shape[0] - 1)]
-    raise ValueError(f"K has unexpected type {type(k)}")
-
-
-@dataclasses.dataclass
-class PredictionData:
-    predictions: pd.Series
-    prediction_probas: Optional[pd.DataFrame]
-    labels: List[Union[str, int]]
+    if prob_threshold is not None:
+        if prob_threshold < 0.0 or prob_threshold > 1.0:
+            raise ValueError(f"prob_threshold should be in range [0.0, 1.0] but was {k}")
+        return probas.iloc[max(int(np.ceil(prob_threshold * prediction_probas.shape[0])) - 1, 0)]
+    if k is None:
+        raise ValueError("Either k or prob_threshold should be not None")
+    if k <= 0:
+        raise ValueError("K should be > 0")
+    return probas.iloc[min(k, prediction_probas.shape[0] - 1)]
 
 
 def get_prediction_data(
-    data: pd.DataFrame,
-    data_columns: DatasetColumns,
-    pos_label: Optional[Union[str, int]],
-    threshold: float = 0.5,
+    data: pd.DataFrame, data_columns: DatasetColumns, pos_label: Optional[Union[str, int]], threshold: float = 0.5
 ) -> PredictionData:
     """Get predicted values and optional prediction probabilities from source data.
     Also take into account a threshold value - if a probability is less than the value, do not take it into account.
@@ -105,30 +99,47 @@ def get_prediction_data(
     # for multiclass classification return just values and probas
     prediction = data_columns.utility_columns.prediction
     target = data_columns.utility_columns.target
+
     if isinstance(prediction, list) and len(prediction) > 2:
+        pred_data = data[prediction].idxmax(axis=1)
+        if is_integer_dtype(data[target]):
+            pred_data = pred_data.apply(lambda x: int(x) if x is not None else None)
         # list of columns with prediction probas, should be same as target labels
         return PredictionData(
-            predictions=data[prediction].idxmax(axis=1),
+            predictions=pred_data,
             prediction_probas=data[prediction],
             labels=prediction,
         )
 
-    if isinstance(prediction, str) and not is_float_dtype(data[prediction]):
+    if isinstance(prediction, str) and not is_float_dtype(data[prediction]) and target is not None:
         # if prediction is not probas, get unique values from it and target
         labels = np.union1d(data[target].unique(), data[prediction].unique()).tolist()
+        return PredictionData(
+            predictions=data[prediction],
+            prediction_probas=None,
+            labels=labels,
+        )
 
-    else:
+    elif isinstance(prediction, str) and not is_float_dtype(data[prediction]) and target is None:
+        # if prediction is not probas, get unique values from it
+        labels = data[prediction].unique().tolist()
+
+    elif isinstance(prediction, str) and is_float_dtype(data[prediction]) and target is not None:
         # if prediction is probas, get unique values from target only
         labels = data[target].unique().tolist()
+
+    elif isinstance(prediction, list):
+        labels = prediction
 
     # binary classification
     # prediction in mapping is a list of two columns:
     # one is positive value probabilities, second is negative value probabilities
     if isinstance(prediction, list) and len(prediction) == 2:
         pos_label = _check_pos_labels(pos_label, labels)
+        labels = pd.Series(labels)
 
         # get negative label for binary classification
-        neg_label = labels[labels != pos_label][0]
+        neg_label = labels[labels != pos_label].iloc[0]
 
         predictions = threshold_probability_labels(data[prediction], pos_label, neg_label, threshold)
         return PredictionData(
@@ -141,30 +152,34 @@ def get_prediction_data(
     # target is strings or other values, prediction is a string with positive label name, one column with probabilities
     if (
         isinstance(prediction, str)
+        and target is not None
         and (is_string_dtype(data[target]) or is_object_dtype(data[target]))
         and is_float_dtype(data[prediction])
     ):
         pos_label = _check_pos_labels(pos_label, labels)
 
-        if prediction not in labels:
-            raise ValueError(
-                "No prediction for the target labels were found. "
-                "Consider to rename columns with the prediction to match target labels."
-            )
-
+        neg_label = None
+        if prediction in labels and pos_label != prediction:
+            neg_label = prediction
         # get negative label for binary classification
-        neg_label = labels[labels != pos_label][0]
 
-        if pos_label == prediction:
-            pos_preds = data[prediction]
-
-        else:
+        if neg_label is None:
+            for label in labels:
+                if label != pos_label:
+                    neg_label = label
+        if neg_label is None:
+            raise ValueError("Failed to determine negative label")
+        if prediction in labels and neg_label == prediction:
+            neg_preds = data[prediction]
             pos_preds = data[prediction].apply(lambda x: 1.0 - x)
+        else:
+            pos_preds = data[prediction]
+            neg_preds = data[prediction].apply(lambda x: 1.0 - x)
 
         prediction_probas = pd.DataFrame.from_dict(
             {
                 pos_label: pos_preds,
-                neg_label: pos_preds.apply(lambda x: 1.0 - x),
+                neg_label: neg_preds,
             }
         )
         predictions = threshold_probability_labels(prediction_probas, pos_label, neg_label, threshold)
@@ -196,8 +211,9 @@ def get_prediction_data(
     # binary target and preds are numbers
     elif (
         isinstance(prediction, str)
+        and target is not None
         and is_integer_dtype(data[target].dtype)
-        and data[prediction].dtype == dtype("float")
+        and is_float_dtype(data[prediction])
     ):
         predictions = (data[prediction] >= threshold).astype(dtype("int64"))
         prediction_probas = pd.DataFrame.from_dict(
@@ -216,7 +232,7 @@ def get_prediction_data(
     return PredictionData(
         predictions=data[prediction],
         prediction_probas=None,
-        labels=data[prediction].unique().tolist(),
+        labels=data[prediction].unique().tolist(),  # type: ignore[operator]
     )
 
 
@@ -259,17 +275,57 @@ def calculate_pr_table(binded):
     return result
 
 
-def calculate_matrix(
-    target: pd.Series,
-    prediction: pd.Series,
-    labels: List[Union[str, int]],
-) -> ConfusionMatrix:
+def calculate_lift_table(binded):
+    result = []
+    binded.sort(key=lambda item: item[1], reverse=True)
+    data_size = len(binded)
+    target_class_size = sum([x[0] for x in binded])
+    # we don't use declared STEP_SIZE due to specifics
+    # of lift metric calculation and visualization
+    offset = int(max(np.floor(data_size * 0.01), 1))
+
+    for step in np.arange(offset, data_size + 1, offset):
+        count = min(step, data_size)
+        prob = round(binded[min(step, data_size - 1)][1], 2)
+        top = round(100.0 * min(step, data_size) / data_size)
+        tp = sum([x[0] for x in binded[: min(step, data_size)]])
+        fp = count - tp
+        precision = round(100.0 * tp / count, 1)
+        recall = round(100.0 * tp / target_class_size, 1)
+        f1_score = round(2 / (1 / precision + 1 / recall), 1)
+        lift = round(recall / top, 2)
+        if count <= target_class_size:
+            max_lift = round(100.0 * count / target_class_size / top, 2)
+        else:
+            max_lift = round(100.0 / top, 2)
+        relative_lift = round(lift / max_lift, 2)
+        percent = round(100 * target_class_size / data_size, 2)
+        result.append(
+            [
+                top,
+                int(count),
+                prob,
+                int(tp),
+                int(fp),
+                precision,
+                recall,
+                f1_score,
+                lift,
+                max_lift,
+                relative_lift,
+                percent,
+            ]
+        )
+    return result
+
+
+def calculate_matrix(target: pd.Series, prediction: pd.Series, labels: List[Union[str, int]]) -> ConfusionMatrix:
     sorted_labels = sorted(labels)
     matrix = metrics.confusion_matrix(target, prediction, labels=sorted_labels)
-    return ConfusionMatrix(sorted_labels, [row.tolist() for row in matrix])
+    return ConfusionMatrix(labels=sorted_labels, values=[row.tolist() for row in matrix])
 
 
-def collect_plot_data(prediction_probas: pd.DataFrame):
+def collect_plot_data(prediction_probas: pd.DataFrame) -> Boxes:
     res = {}
     mins = []
     lowers = []
@@ -287,23 +343,7 @@ def collect_plot_data(prediction_probas: pd.DataFrame):
     res["means"] = means
     res["uppers"] = uppers
     res["maxs"] = maxs
-    return res
-
-
-@dataclasses.dataclass
-class DatasetClassificationQuality:
-    accuracy: float
-    precision: float
-    recall: float
-    f1: float
-    roc_auc: Optional[float] = None
-    log_loss: Optional[float] = None
-    tpr: Optional[float] = None
-    tnr: Optional[float] = None
-    fpr: Optional[float] = None
-    fnr: Optional[float] = None
-    rate_plots_data: Optional[Dict] = None
-    plot_data: Optional[Dict] = None
+    return Boxes(mins=mins, lowers=lowers, means=means, uppers=uppers, maxs=maxs)
 
 
 def calculate_metrics(
@@ -311,7 +351,7 @@ def calculate_metrics(
     confusion_matrix: ConfusionMatrix,
     target: pd.Series,
     prediction: PredictionData,
-) -> DatasetClassificationQuality:
+) -> "DatasetClassificationQuality":
     if column_mapping.pos_label is not None:
         pos_label = column_mapping.pos_label
     else:
@@ -322,7 +362,7 @@ def calculate_metrics(
     fnr = None
     roc_auc = None
     log_loss = None
-    rate_plots_data = None
+    rate_plots_data: Optional[RatesPlotData] = None
     plot_data = None
     if len(prediction.labels) == 2:
         confusion_by_classes = calculate_confusion_by_classes(
@@ -343,7 +383,7 @@ def calculate_metrics(
         f1 = metrics.f1_score(target, prediction.predictions, average="macro")
     if prediction.prediction_probas is not None:
         binaraized_target = (
-            target.astype(str).values.reshape(-1, 1) == list(prediction.prediction_probas.columns.astype(str))
+            target.astype(str).to_numpy().reshape(-1, 1) == list(prediction.prediction_probas.columns.astype(str))
         ).astype(int)
         prediction_probas_array = prediction.prediction_probas.to_numpy()
         roc_auc = metrics.roc_auc_score(binaraized_target, prediction_probas_array, average="macro")
@@ -351,30 +391,11 @@ def calculate_metrics(
         plot_data = collect_plot_data(prediction.prediction_probas)
     if len(prediction.labels) == 2 and prediction.prediction_probas is not None:
         fprs, tprs, thrs = metrics.roc_curve(target == pos_label, prediction.prediction_probas[pos_label])
-        roc_curve = {"fpr": fprs.tolist(), "tpr": tprs.tolist(), "thrs": thrs.tolist()}
-        rate_plots_data = {
-            "thrs": roc_curve["thrs"],
-            "tpr": roc_curve["tpr"],
-            "fpr": roc_curve["fpr"],
-        }
-        df = pd.DataFrame(
-            {"true": (target == pos_label).astype(int).values, "preds": prediction.prediction_probas[pos_label].values}
+        tnrs = 1 - fprs
+        fnrs = 1 - tprs
+        rate_plots_data = RatesPlotData(
+            thrs=thrs.tolist(), tpr=tprs.tolist(), fpr=fprs.tolist(), fnr=fnrs.tolist(), tnr=tnrs.tolist()
         )
-        tnrs = []
-        fnrs = []
-        for tr in rate_plots_data["thrs"]:
-            if tr < 1:
-                tn = df[(df.true == 0) & (df.preds < tr)].shape[0]
-                fn = df[(df.true == 1) & (df.preds < tr)].shape[0]
-                tp = df[(df.true == 1) & (df.preds >= tr)].shape[0]
-                fp = df[(df.true == 0) & (df.preds >= tr)].shape[0]
-                tnrs.append(tn / (tn + fp))
-                fnrs.append(fn / (fn + tp))
-            else:
-                fnrs.append(1)
-                tnrs.append(1)
-        rate_plots_data["fnr"] = fnrs
-        rate_plots_data["tnr"] = tnrs
 
     return DatasetClassificationQuality(
         accuracy=metrics.accuracy_score(target, prediction.predictions),
