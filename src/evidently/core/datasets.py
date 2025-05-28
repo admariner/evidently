@@ -17,11 +17,11 @@ import pandas as pd
 
 from evidently._pydantic_compat import BaseModel
 from evidently._pydantic_compat import parse_obj_as
+from evidently.core.base_types import Label
 from evidently.core.tests import GenericTest
 from evidently.legacy.base_metric import DisplayName
 from evidently.legacy.core import ColumnType
 from evidently.legacy.features.generated_features import GeneratedFeatures
-from evidently.legacy.metric_results import Label
 from evidently.legacy.options.base import AnyOptions
 from evidently.legacy.options.base import Options
 from evidently.legacy.pipeline.column_mapping import ColumnMapping
@@ -650,6 +650,8 @@ def infer_column_type(column_data: pd.Series) -> ColumnType:
             return ColumnType.Categorical
     if column_data.dtype.name == "object":
         without_na = column_data.dropna()
+        if without_na.count() == 0:
+            return ColumnType.Unknown
         if isinstance(without_na.iloc[0], str) and isinstance(without_na.iloc[-1], str):
             if column_data.nunique() > (column_data.count() * 0.5):
                 return ColumnType.Text
