@@ -1,12 +1,14 @@
 import asyncio
 import dataclasses
 import datetime
+import json
 from abc import ABC
 from abc import abstractmethod
 from asyncio import Lock
 from asyncio import Semaphore
 from asyncio import sleep
 from importlib.util import find_spec
+from typing import Any
 from typing import Awaitable
 from typing import Callable
 from typing import ClassVar
@@ -307,6 +309,9 @@ class LLMOptions(Option):
             return None
         return self.api_key.get_secret_value()
 
+    def get_additional_kwargs(self) -> Dict[str, Any]:
+        return {}
+
 
 class OpenAIKey(LLMOptions):
     __provider_name__: ClassVar[str] = "openai"
@@ -386,16 +391,23 @@ class LiteLLMWrapper(LLMWrapper):
         self.model = model
         self.options: LLMOptions = options.get(self.__llm_options_type__)
 
+    @property
+    def full_model_name(self) -> str:
+        if "/" in self.model or not hasattr(self.options, "__provider_name__"):
+            return self.model
+        return f"{self.options.__provider_name__}/{self.model}"
+
     async def complete(self, messages: List[LLMMessage]) -> LLMResult[str]:
         from litellm import acompletion
         from litellm.types.utils import ModelResponse
         from litellm.types.utils import Usage
 
         response: ModelResponse = await acompletion(
-            model=self.model,
+            model=self.full_model_name,
             messages=[dataclasses.asdict(m) for m in messages],
             api_key=self.options.get_api_key(),
             api_base=self.options.api_url,
+            **self.options.get_additional_kwargs(),
         )
         content = response.choices[0].message.content
         usage: Optional[Usage] = response.model_extra.get("usage")
@@ -428,6 +440,24 @@ class GeminiWrapper(LiteLLMWrapper):
     __llm_options_type__: ClassVar = GeminiOptions
 
 
+class VertexAIOptions(LLMOptions):
+    __provider_name__: ClassVar = "vertex_ai"
+
+    def get_additional_kwargs(self) -> Dict[str, Any]:
+        if self.api_key is None or len(self.api_key.get_secret_value()) > 10000:  # check for using non-strict json
+            return {}
+        try:
+            vertex_credentials = json.loads(self.api_key.get_secret_value())
+        except json.decoder.JSONDecodeError:
+            return {}
+        return {"vertex_credentials": vertex_credentials}
+
+
+@llm_provider("vertex_ai", None)
+class VertexAIWrapper(LiteLLMWrapper):
+    __llm_options_type__: ClassVar = VertexAIOptions
+
+
 class DeepSeekOptions(LLMOptions):
     __provider_name__: ClassVar = "deepseek"
 
@@ -435,6 +465,26 @@ class DeepSeekOptions(LLMOptions):
 @llm_provider("deepseek", None)
 class DeepSeekWrapper(LiteLLMWrapper):
     __llm_options_type__: ClassVar = DeepSeekOptions
+
+
+class MistralOptions(LLMOptions):
+    __provider_name__: ClassVar = "mistral"
+    limits: RateLimits = RateLimits(rpm=1, itpm=500000 // 60, otpm=500000 // 60, interval=datetime.timedelta(seconds=1))
+
+
+@llm_provider("mistral", None)
+class MistralWrapper(LiteLLMWrapper):
+    __llm_options_type__: ClassVar = MistralOptions
+
+
+class OllamaOptions(LLMOptions):
+    __provider_name__: ClassVar = "ollama"
+    api_url: str
+
+
+@llm_provider("ollama", None)
+class OllamaWrapper(LiteLLMWrapper):
+    __llm_options_type__: ClassVar = OllamaOptions
 
 
 litellm_providers = [
@@ -522,7 +572,7 @@ def _create_litellm_wrapper(provider: str):
     )
 
     def __init__(self, model: str, options: Options):
-        super(self.__class__, self).__init__(f"{provider}/{model}", options)
+        super(self.__class__, self).__init__(model, options)
 
     wrapper_type = type(
         wrapper_name,
