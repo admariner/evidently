@@ -22,12 +22,14 @@ from typing import Type
 from typing import TypeVar
 from typing import Union
 
+import numpy as np
 import typing_inspect
 
 from evidently._pydantic_compat import BaseModel
 from evidently._pydantic_compat import Field
+from evidently._pydantic_compat import parse_obj_as
 from evidently._pydantic_compat import validator
-from evidently.legacy.metric_results import Label
+from evidently.core.base_types import Label
 from evidently.legacy.model.dashboard import DashboardInfo
 from evidently.legacy.model.widget import AdditionalGraphInfo
 from evidently.legacy.model.widget import BaseWidgetInfo
@@ -38,6 +40,7 @@ from evidently.legacy.renderers.html_widgets import counter
 from evidently.legacy.renderers.html_widgets import table_data
 from evidently.legacy.tests.base_test import TestStatus
 from evidently.legacy.utils.dashboard import TemplateParams
+from evidently.legacy.utils.dashboard import file_html_template
 from evidently.legacy.utils.dashboard import inline_iframe_html_template
 from evidently.pydantic_utils import AutoAliasMixin
 from evidently.pydantic_utils import EvidentlyBaseModel
@@ -198,7 +201,7 @@ class MetricResult(AutoAliasMixin, PolymorphicModel):
         return str(self)
 
 
-def render_widgets(widgets: List[BaseWidgetInfo]):
+def render_widgets(widgets: List[BaseWidgetInfo], as_iframe: bool = False):
     items = []
     for info_item in widgets:
         for additional_graph in info_item.get_additional_graphs():
@@ -218,7 +221,8 @@ def render_widgets(widgets: List[BaseWidgetInfo]):
         dashboard_info=dashboard_info,
         additional_graphs=additional_graphs,
     )
-    return inline_iframe_html_template(template_params)
+
+    return inline_iframe_html_template(template_params) if as_iframe else file_html_template(template_params)
 
 
 TMetricReturn = Tuple[MetricResult, Optional[MetricResult]]
@@ -286,6 +290,9 @@ class SingleValue(MetricResult):
 
 
 class ByLabelValue(MetricResult):
+    class Config:
+        smart_union = True
+
     values: Dict[Label, SingleValue]
 
     def labels(self) -> List[Label]:
@@ -305,8 +312,15 @@ class ByLabelValue(MetricResult):
     def to_simple_dict(self) -> object:
         return {k: v.value for k, v in self.values.items()}
 
+    @validator("values", pre=True)
+    def convert_labels(cls, value):
+        return {convert_types(k): v for k, v in value.items()}
+
 
 class ByLabelCountValue(MetricResult):
+    class Config:
+        smart_union = True
+
     counts: Dict[Label, SingleValue]
     shares: Dict[Label, SingleValue]
 
@@ -352,6 +366,41 @@ class ByLabelCountValue(MetricResult):
             v.metric_value_location = by_label_count_value_location(metric, k, True)
         for k, v in self.shares.items():
             v.metric_value_location = by_label_count_value_location(metric, k, False)
+
+    @validator("counts", "shares", pre=True)
+    def convert_labels(cls, value):
+        return {convert_types(k): v for k, v in value.items()}
+
+
+try:
+    np_bool = np.bool  # type: ignore[attr-defined]
+except:  # noqa: E722
+    np_bool = bool  # type: ignore[assignment]
+
+
+try:
+    np_bool_ = np.bool_
+except:  # noqa: E722
+    np_bool_ = bool  # type: ignore[assignment]
+
+
+def convert_types(val):
+    if isinstance(
+        val,
+        (
+            np_bool,
+            np_bool_,
+            bool,
+        ),
+    ):
+        return bool(val)
+    if isinstance(val, (np.int16, np.int32, np.int64, int)):
+        return int(val)
+    if isinstance(val, str):
+        return val
+    if val is None or np.isnan(val):
+        return val
+    raise ValueError(f"type {type(val)} not supported as Label")
 
 
 class CountValue(MetricResult):
@@ -481,7 +530,9 @@ def get_default_render_ref(title: str, result: MetricResult, ref_result: MetricR
                 title=title,
                 size=WidgetSize.FULL,
                 column_names=["Label", "Current value", "Reference value"],
-                data=[(k, f"{v:0.3f}", f"{ref_result.values[k].value}") for k, v in result.values.items()],
+                data=sorted(
+                    [(k, f"{v:0.3f}", f"{ref_result.values[k].value}") for k, v in result.values.items()],
+                ),
             )
         ]
     if isinstance(result, ByLabelCountValue):
@@ -491,7 +542,9 @@ def get_default_render_ref(title: str, result: MetricResult, ref_result: MetricR
                 title=title,
                 size=WidgetSize.FULL,
                 column_names=["Label", "Current value", "Reference value"],
-                data=[(k, f"{v:0.3f}", f"{ref_result.counts[k].value}") for k, v in result.counts.items()],
+                data=sorted(
+                    [(k, f"{v:0.3f}", f"{ref_result.counts[k].value}") for k, v in result.counts.items()],
+                ),
             )
         ]
     if isinstance(result, CountValue):
@@ -551,7 +604,9 @@ def get_default_render(title: str, result: TResult) -> List[BaseWidgetInfo]:
             table_data(
                 title=title,
                 column_names=["Label", "Value"],
-                data=[(k, f"{v.value:0.3f}") for k, v in result.values.items()],
+                data=sorted(
+                    [(k, f"{v.value:0.3f}") for k, v in result.values.items()],
+                ),
             )
         ]
     if isinstance(result, ByLabelCountValue):
@@ -559,7 +614,9 @@ def get_default_render(title: str, result: TResult) -> List[BaseWidgetInfo]:
             table_data(
                 title=title,
                 column_names=["Label", "Value"],
-                data=[(k, f"{v.value:0.3f}") for k, v in result.counts.items()],
+                data=sorted(
+                    [(k, f"{v.value:0.3f}") for k, v in result.counts.items()],
+                ),
             )
         ]
     if isinstance(result, CountValue):
@@ -662,6 +719,7 @@ class MetricTest(AutoAliasMixin, EvidentlyBaseModel):
 
     __alias_type__: ClassVar[str] = "test_v2"
     is_critical: bool = True
+    alias: Optional[str] = None
 
     @abstractmethod
     def to_test(self) -> MetricTestProto:
@@ -672,7 +730,7 @@ class MetricTest(AutoAliasMixin, EvidentlyBaseModel):
         status = result.status
         if result.status == TestStatus.FAIL and not self.is_critical:
             status = TestStatus.WARNING
-        description = f"{value.display_name}: {result.description}"
+        description = f"{self.alias or value.display_name}: {result.description}"
         return MetricTestResult(
             id=result.id,
             name=result.name,
@@ -830,6 +888,8 @@ def convert_test(test: Union[MetricTest, GenericTest]) -> MetricTest:
         return test.for_metric()
     if isinstance(test, MetricTest):
         return test
+    if isinstance(test, dict):
+        return parse_obj_as(MetricTest, test)
     raise ValueError(f"test {test} is not a subclass of MetricTest")
 
 
