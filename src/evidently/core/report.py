@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import pathlib
 import typing
 from datetime import datetime
 from itertools import chain
@@ -12,6 +13,7 @@ from typing import Tuple
 from typing import TypeVar
 from typing import Union
 
+from evidently.core.base_types import Label
 from evidently.core.metric_types import Metric
 from evidently.core.metric_types import MetricCalculationBase
 from evidently.core.metric_types import MetricId
@@ -89,6 +91,7 @@ class Context:
     _current_graph_level: dict
     _legacy_metrics: Dict[str, Tuple[object, List[BaseWidgetInfo]]]
     _metrics_container: Dict[Fingerprint, List[MetricOrContainer]]
+    _labels: Optional[List[Label]]
 
     def __init__(self, report: "Report"):
         self._metrics = {}
@@ -99,6 +102,7 @@ class Context:
         self._current_graph_level = self._metrics_graph
         self._legacy_metrics = {}
         self._metrics_container = {}
+        self._labels = None
 
     def init_dataset(self, current_data: Dataset, reference_data: Optional[Dataset]):
         self._input_data = (current_data, reference_data)
@@ -187,6 +191,25 @@ class Context:
     ) -> None:
         self._metrics_container[metric_container_fingerprint] = items
 
+    def get_labels(self, target: str, prediction: Optional[str]) -> List[Label]:
+        if self._labels is not None:
+            return self._labels
+        current_labels = (
+            set(self._input_data[0].column(target).data)  # type: ignore[call-overload]
+            | set([] if prediction is None else self._input_data[0].column(prediction).data)  # type: ignore[call-overload]
+        )
+        ref_data = self._input_data[1]
+        reference_labels = (
+            set()
+            if not self.has_reference or ref_data is None
+            else (
+                set(ref_data.column(target).data)  # type: ignore[call-overload]
+                | set([] if prediction is None else ref_data.column(prediction).data)  # type: ignore[call-overload]
+            )
+        )
+        self._labels = list(current_labels | reference_labels)
+        return self._labels
+
 
 def _default_input_data_generator(context: "Context") -> InputData:
     classification = context.data_definition.get_classification("default")
@@ -271,14 +294,17 @@ class Snapshot:
     _timestamp: datetime
     _tags: List[str]
     _metadata: Dict[str, MetadataValueType]
+    _name: Optional[str]
 
     def __init__(
         self,
         report: "Report",
+        name: Optional[str],
         timestamp: datetime,
         metadata: Dict[str, MetadataValueType],
         tags: List[str],
     ):
+        self._name = name
         self._report = report
         self._context = Context(report)
         self._snapshot_item = []
@@ -331,12 +357,15 @@ class Snapshot:
                 metric_tests_widget(tests),
             ]
 
-    def _repr_html_(self):
+    def get_html_str(self, as_iframe: bool):
         from evidently.legacy.renderers.html_widgets import group_widget
 
         widgets_to_render: List[BaseWidgetInfo] = [group_widget(title="", widgets=self._widgets)] + self._tests_widgets
 
-        return render_widgets(widgets_to_render)
+        return render_widgets(widgets_to_render, as_iframe=as_iframe)
+
+    def _repr_html_(self):
+        return self.get_html_str(as_iframe=True)
 
     def render_only_fingerprint(self, fingerprint: str):
         from IPython.display import HTML
@@ -367,7 +396,7 @@ class Snapshot:
     def save_html(self, filename: Union[str, typing.IO]):
         if isinstance(filename, str):
             with open(filename, "w", encoding="utf-8") as out_file:
-                out_file.write(self._repr_html_())
+                out_file.write(self.get_html_str(as_iframe=False))
 
     def save_json(self, filename: Union[str, typing.IO]):
         if isinstance(filename, str):
@@ -388,6 +417,7 @@ class Snapshot:
     def to_snapshot_model(self):
         snapshot = SnapshotModel(
             report=ReportModel(items=[]),
+            name=self._name,
             timestamp=self._timestamp,
             metadata=self._metadata,
             tags=self._tags,
@@ -397,6 +427,11 @@ class Snapshot:
             tests_widgets=self._tests_widgets,
         )
         return snapshot
+
+    @staticmethod
+    def load(path: Union[str, pathlib.Path]):
+        with open(path, "r", encoding="utf-8") as in_file:
+            return Snapshot.loads(in_file.read())
 
     @staticmethod
     def loads(data: str) -> "Snapshot":
@@ -409,7 +444,13 @@ class Snapshot:
 
     @staticmethod
     def load_model(model: SnapshotModel) -> "Snapshot":
-        snapshot = Snapshot(report=Report([]), timestamp=model.timestamp, metadata=model.metadata, tags=model.tags)
+        snapshot = Snapshot(
+            report=Report([]),
+            name=model.name,
+            timestamp=model.timestamp,
+            metadata=model.metadata,
+            tags=model.tags,
+        )
         snapshot._metrics = model.metric_results
         snapshot._top_level_metrics = model.top_level_metrics
         snapshot._widgets = model.widgets
@@ -422,10 +463,21 @@ class Snapshot:
                 self._metrics[metric].to_dict() if self._metrics.get(metric) is not None else {}
                 for metric in self._top_level_metrics
             ],
-            "tests": [
-                test_result.dict() for metric in self._top_level_metrics for test_result in self._metrics[metric].tests
-            ],
+            "tests": [test_result.dict() for test_result in self.tests_results],
         }
+
+    @property
+    def tests_results(self):
+        return [test_result for metric in self._top_level_metrics for test_result in self._metrics[metric].tests]
+
+    def get_name(self) -> Optional[str]:
+        return self._name
+
+    def set_name(self, name: str):
+        self._name = name
+
+
+Run = Snapshot
 
 
 class Report:
@@ -466,6 +518,7 @@ class Report:
         timestamp: Optional[datetime] = None,
         metadata: Dict[str, MetadataValueType] = None,
         tags: List[str] = None,
+        name: Optional[str] = None,
     ) -> Snapshot:
         current_dataset = Dataset.from_any(current_data)
         reference_dataset = Dataset.from_any(reference_data) if reference_data is not None else None
@@ -476,7 +529,7 @@ class Report:
         _tags = self.tags.copy()
         if tags is not None:
             _tags.extend(tags)
-        snapshot = Snapshot(self, _timestamp, _metadata, _tags)
+        snapshot = Snapshot(self, name, _timestamp, _metadata, _tags)
         snapshot.run(current_dataset, reference_dataset)
         return snapshot
 
